@@ -1,6 +1,6 @@
 # CestIA
 
-Aplicación **local** (Python + PySide6) para analizar el precio de tu compra en **Mercadona** y **Carrefour**: búsqueda, cesta, historial, alertas, estadísticas e IA opcional (Gemini).
+Aplicación **local** (Python + PySide6) para analizar el precio de tu compra en **Mercadona**, **Carrefour** y **Alcampo**: búsqueda, cesta, historial, alertas, estadísticas e IA opcional (Gemini).
 
 > APIs no oficiales de las tiendas. Uso personal. Pueden cambiar o dejar de funcionar sin aviso.
 
@@ -34,8 +34,8 @@ uvicorn cestia.servidor_web:aplicacion --reload --host 0.0.0.0 --port 8000
 
 | Módulo | Qué hace |
 |--------|----------|
-| **Productos** | Búsqueda multi-tienda (Mercadona / Carrefour), con columna de tienda |
-| **Configuración → Tiendas** | Activar o desactivar Mercadona y Carrefour |
+| **Productos** | Búsqueda multi-tienda (Mercadona / Carrefour / Alcampo), con columna de tienda |
+| **Configuración → Tiendas** | Activar o desactivar Mercadona, Carrefour y Alcampo |
 | **Ficha** | Precio, foto, ingredientes, alérgenos, Nutri-Score, macros, historial y alternativas más baratas |
 | **Cesta** | Coste total + kcal / proteínas / hidratos / grasas / fibra / azúcar / sal |
 | **Historial** | Compras guardadas e insights de gasto |
@@ -53,12 +53,12 @@ cestia.py                 # entrada escritorio
 run_app.py                # venv + dependencias + arranque
 cestia/
   configuracion.py
-  catalogo.py             # búsqueda Mercadona + Carrefour
+  catalogo.py             # búsqueda Mercadona + Carrefour + Alcampo
   tiendas.py              # preferencias de tiendas activas
   enriquecimiento.py      # Open Food Facts
   asistente_ia.py         # Gemini
   servidor_web.py
-  cliente/                # Mercadona, Algolia, Carrefour (Empathy)
+  cliente/                # Mercadona, Algolia, Carrefour (Empathy), Alcampo
   base_datos/             # SQLite local
   interfaz/               # PySide6
 img/                      # logo.png, logomini.png
@@ -69,7 +69,7 @@ datos/cestia.db
 
 ### Tiendas
 
-En la app: **Configuración** → marca Mercadona y/o Carrefour → **Guardar**.
+En la app: **Configuración** → marca Mercadona, Carrefour y/o Alcampo → **Guardar**.
 
 ### IA — Google Gemini
 

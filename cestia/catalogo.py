@@ -1,4 +1,4 @@
-"""Sincroniza productos de Mercadona y Carrefour → SQLite."""
+"""Sincroniza productos de Mercadona, Carrefour y Alcampo → SQLite."""
 
 from __future__ import annotations
 
@@ -6,6 +6,12 @@ from typing import Any
 
 from cestia.base_datos.repositorio import Repositorio
 from cestia.cliente import ClienteMercadona, ErrorAPIMercadona, obtener_cliente
+from cestia.cliente.alcampo import (
+    ClienteAlcampo,
+    ErrorAPIAlcampo,
+    es_id_alcampo,
+    obtener_cliente_alcampo,
+)
 from cestia.cliente.carrefour import (
     ClienteCarrefour,
     ErrorAPICarrefour,
@@ -14,7 +20,9 @@ from cestia.cliente.carrefour import (
 )
 from cestia.enriquecimiento import ClienteOpenFoodFacts, parsear_nutricion_mercadona
 from cestia.normalizacion import normalizar_producto
-from cestia.tiendas import carrefour_activo, mercadona_activo
+from cestia.tiendas import alcampo_activo, carrefour_activo, mercadona_activo
+
+_ORDEN_TIENDA = {"mercadona": 0, "carrefour": 1, "alcampo": 2}
 
 
 class ServicioCatalogo:
@@ -23,11 +31,13 @@ class ServicioCatalogo:
         repositorio: Repositorio,
         cliente: ClienteMercadona | None = None,
         cliente_carrefour: ClienteCarrefour | None = None,
+        cliente_alcampo: ClienteAlcampo | None = None,
         off: ClienteOpenFoodFacts | None = None,
     ) -> None:
         self.repositorio = repositorio
         self.cliente = cliente or obtener_cliente()
         self.cliente_carrefour = cliente_carrefour or obtener_cliente_carrefour()
+        self.cliente_alcampo = cliente_alcampo or obtener_cliente_alcampo()
         self.off = off or ClienteOpenFoodFacts()
 
     def buscar(self, consulta: str, limite: int = 24) -> list[dict[str, Any]]:
@@ -52,13 +62,21 @@ class ServicioCatalogo:
             except ErrorAPICarrefour as exc:
                 errores.append(f"Carrefour: {exc}")
 
+        if alcampo_activo(self.repositorio):
+            try:
+                hits = self.cliente_alcampo.buscar(consulta, limite=limite)
+                for hit in hits:
+                    producto = self._persistir_alcampo(hit, enriquecer=False)
+                    resultados.append(producto)
+            except ErrorAPIAlcampo as exc:
+                errores.append(f"Alcampo: {exc}")
+
         if not resultados and errores:
             raise RuntimeError(" · ".join(errores))
 
-        # Mercadona primero, luego Carrefour; dentro de cada grupo por precio
         resultados.sort(
             key=lambda p: (
-                0 if (p.get("tienda") or "mercadona") == "mercadona" else 1,
+                _ORDEN_TIENDA.get((p.get("tienda") or "mercadona"), 9),
                 p.get("precio_unidad") is None,
                 p.get("precio_unidad") or 1e9,
             )
@@ -68,16 +86,15 @@ class ServicioCatalogo:
     def obtener_producto(
         self, id_producto: str, *, enriquecer: bool = True
     ) -> dict[str, Any]:
-        if es_id_carrefour(id_producto):
+        if es_id_carrefour(id_producto) or es_id_alcampo(id_producto):
             local = self.repositorio.obtener_producto(id_producto)
             if local:
                 if enriquecer:
                     return self._enriquecer_registro(local)
                 return local
-            # reintentar por nombre/id vía búsqueda corta no siempre posible;
-            # devolver lo mínimo si no está en caché local
-            raise ErrorAPICarrefour(
-                "Producto Carrefour no encontrado en local. Vuelve a buscarlo."
+            marca = "Carrefour" if es_id_carrefour(id_producto) else "Alcampo"
+            raise RuntimeError(
+                f"Producto {marca} no encontrado en local. Vuelve a buscarlo."
             )
 
         bruto = self.cliente.obtener_producto(id_producto)
@@ -89,7 +106,9 @@ class ServicioCatalogo:
         aciertos = self.buscar(ean, limite=10)
         for acierto in aciertos:
             if acierto.get("ean") == ean:
-                if enriquecer and not es_id_carrefour(acierto["id"]):
+                if enriquecer and not (
+                    es_id_carrefour(acierto["id"]) or es_id_alcampo(acierto["id"])
+                ):
                     return self.obtener_producto(acierto["id"], enriquecer=True)
                 if enriquecer:
                     return self._enriquecer_registro(acierto)
@@ -171,6 +190,29 @@ class ServicioCatalogo:
             "precio_bulto": hit.get("precio_bulto"),
             "precio_unidad_anterior": None,
             "tienda": "carrefour",
+        }
+        return self._guardar_y_opcionalmente_enriquecer(registro, enriquecer=enriquecer)
+
+    def _persistir_alcampo(
+        self, hit: dict[str, Any], *, enriquecer: bool
+    ) -> dict[str, Any]:
+        registro = {
+            "id": hit["id"],
+            "ean": hit.get("ean"),
+            "nombre": hit.get("nombre"),
+            "marca": hit.get("marca"),
+            "envase": hit.get("envase"),
+            "categoria": hit.get("categoria"),
+            "miniatura": hit.get("miniatura"),
+            "url_compartir": hit.get("url_compartir"),
+            "ingredientes": None,
+            "alergenos": None,
+            "tamano_unidad": hit.get("tamano_unidad"),
+            "formato_tamano": hit.get("formato_tamano"),
+            "precio_unidad": hit.get("precio_unidad"),
+            "precio_bulto": hit.get("precio_bulto"),
+            "precio_unidad_anterior": None,
+            "tienda": "alcampo",
         }
         return self._guardar_y_opcionalmente_enriquecer(registro, enriquecer=enriquecer)
 

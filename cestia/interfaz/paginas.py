@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from cestia.interfaz.nutriscore import GraficoNutriScore
+from cestia.interfaz.progreso import crear_barra_progreso, mostrar_progreso
 from cestia.interfaz.utilidades import formatear_euros, cargar_miniatura
 from cestia.interfaz.trabajadores import ejecutar_en_hilo
 
@@ -63,6 +64,8 @@ class PaginaBusqueda(QWidget):
         self.status = QLabel("")
         self.status.setObjectName("Atenuado")
         layout.addWidget(self.status)
+        self.progreso = crear_barra_progreso()
+        layout.addWidget(self.progreso)
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
@@ -84,13 +87,15 @@ class PaginaBusqueda(QWidget):
     def actualizar(self) -> None:
         if not self.repositorio:
             return
-        from cestia.tiendas import carrefour_activo, mercadona_activo
+        from cestia.tiendas import alcampo_activo, carrefour_activo, mercadona_activo
 
         activas = []
         if mercadona_activo(self.repositorio):
             activas.append("Mercadona")
         if carrefour_activo(self.repositorio):
             activas.append("Carrefour")
+        if alcampo_activo(self.repositorio):
+            activas.append("Alcampo")
         if activas:
             self.subtitulo.setText("Busca en: " + " · ".join(activas))
         else:
@@ -104,11 +109,20 @@ class PaginaBusqueda(QWidget):
             return
         self.status.setText("Buscando…")
         self.table.setRowCount(0)
+        mostrar_progreso(self.progreso, True)
 
         def work():
             return self.catalogo.buscar(q)
 
-        ejecutar_en_hilo(work, self._on_results, lambda e: self.status.setText(f"Error: {e}"))
+        def ok(results):
+            mostrar_progreso(self.progreso, False)
+            self._on_results(results)
+
+        def error(e):
+            mostrar_progreso(self.progreso, False)
+            self.status.setText(f"Error: {e}")
+
+        ejecutar_en_hilo(work, ok, error)
 
     def _on_results(self, results: list[dict[str, Any]]) -> None:
         self._results = results
@@ -161,6 +175,8 @@ class PaginaBusqueda(QWidget):
     def _nombre_supermercado(producto: dict[str, Any]) -> str:
         tienda = (producto.get("tienda") or "").strip().lower()
         id_producto = str(producto.get("id") or "")
+        if tienda == "alcampo" or id_producto.startswith("ac:"):
+            return "Alcampo"
         if tienda == "carrefour" or id_producto.startswith("cf:"):
             return "Carrefour"
         if tienda == "mercadona" or id_producto.isdigit():
@@ -195,6 +211,9 @@ class PaginaProducto(QWidget):
         top.addWidget(self.back)
         top.addStretch()
         layout.addLayout(top)
+
+        self.progreso = crear_barra_progreso()
+        layout.addWidget(self.progreso)
 
         scroll = QScrollArea()
         scroll.setObjectName("ScrollFicha")
@@ -331,6 +350,7 @@ class PaginaProducto(QWidget):
 
     def cargar(self, id_producto: str) -> None:
         self.title.setText("Cargando…")
+        mostrar_progreso(self.progreso, True)
 
         def work():
             product = self.catalogo.obtener_producto(id_producto, enriquecer=True)
@@ -339,7 +359,15 @@ class PaginaProducto(QWidget):
             history = self.repositorio.historial_precios(id_producto)
             return product, compare, alts, history
 
-        ejecutar_en_hilo(work, self._show, lambda e: self.title.setText(f"Error: {e}"))
+        def ok(payload):
+            mostrar_progreso(self.progreso, False)
+            self._show(payload)
+
+        def error(e):
+            mostrar_progreso(self.progreso, False)
+            self.title.setText(f"Error: {e}")
+
+        ejecutar_en_hilo(work, ok, error)
 
     def _show(self, payload) -> None:
         product, compare, alts, history = payload
@@ -1184,9 +1212,11 @@ class PaginaConfiguracion(QWidget):
         )
         self.check_mercadona = QCheckBox("Mercadona")
         self.check_carrefour = QCheckBox("Carrefour")
+        self.check_alcampo = QCheckBox("Alcampo")
         tiendas_row = QHBoxLayout()
         tiendas_row.addWidget(self.check_mercadona)
         tiendas_row.addWidget(self.check_carrefour)
+        tiendas_row.addWidget(self.check_alcampo)
         tiendas_row.addStretch()
         layout.addLayout(tiendas_row)
 
@@ -1221,7 +1251,7 @@ class PaginaConfiguracion(QWidget):
         layout.addWidget(ayuda)
 
     def actualizar(self) -> None:
-        from cestia.tiendas import carrefour_activo, mercadona_activo
+        from cestia.tiendas import alcampo_activo, carrefour_activo, mercadona_activo
 
         clave = self.asistente.obtener_clave()
         self.campo_clave.setText(clave)
@@ -1233,6 +1263,7 @@ class PaginaConfiguracion(QWidget):
             self.campo_modelo.setEditText(modelo)
         self.check_mercadona.setChecked(mercadona_activo(self.repositorio))
         self.check_carrefour.setChecked(carrefour_activo(self.repositorio))
+        self.check_alcampo.setChecked(alcampo_activo(self.repositorio))
         if clave:
             self.estado.setText("Hay una clave configurada.")
         else:
@@ -1251,17 +1282,23 @@ class PaginaConfiguracion(QWidget):
         modelo = self.campo_modelo.currentText().strip() or "gemini-2.0-flash"
         self.asistente.guardar_clave(clave)
         self.asistente.guardar_modelo(modelo)
-        if not self.check_mercadona.isChecked() and not self.check_carrefour.isChecked():
+        if (
+            not self.check_mercadona.isChecked()
+            and not self.check_carrefour.isChecked()
+            and not self.check_alcampo.isChecked()
+        ):
             QMessageBox.warning(
                 self,
                 "Configuración",
-                "Debes dejar al menos una tienda activa (Mercadona o Carrefour).",
+                "Debes dejar al menos una tienda activa "
+                "(Mercadona, Carrefour o Alcampo).",
             )
             return
         guardar_tiendas(
             self.repositorio,
             mercadona=self.check_mercadona.isChecked(),
             carrefour=self.check_carrefour.isChecked(),
+            alcampo=self.check_alcampo.isChecked(),
         )
         partes = []
         if clave:
@@ -1273,6 +1310,8 @@ class PaginaConfiguracion(QWidget):
             tiendas.append("Mercadona")
         if self.check_carrefour.isChecked():
             tiendas.append("Carrefour")
+        if self.check_alcampo.isChecked():
+            tiendas.append("Alcampo")
         partes.append("Tiendas: " + ", ".join(tiendas))
         mensaje = " ".join(partes)
         QMessageBox.information(self, "Configuración", mensaje)
@@ -1343,7 +1382,7 @@ class PaginaAbout(QWidget):
         layout.addWidget(self.logo, alignment=Qt.AlignHCenter)
 
         descripcion = QLabel(
-            "CestIA analiza el precio de tu compra en Mercadona y Carrefour "
+            "CestIA analiza el precio de tu compra en Mercadona, Carrefour y Alcampo "
             "desde tu equipo. Los datos se guardan en local; las tiendas usan "
             "APIs no oficiales pensadas para uso personal."
         )
@@ -1360,7 +1399,7 @@ class PaginaAbout(QWidget):
         layout.addWidget(funciones_titulo)
 
         funciones = QLabel(
-            "• Búsqueda multi-tienda (Mercadona y Carrefour), activables en Configuración\n"
+            "• Búsqueda multi-tienda (Mercadona, Carrefour y Alcampo), activables en Configuración\n"
             "• Ficha de producto: precio, foto, ingredientes, alérgenos, Nutri-Score y macros\n"
             "• Historial de precios y alternativas más baratas\n"
             "• Cesta con coste total y resumen nutricional\n"

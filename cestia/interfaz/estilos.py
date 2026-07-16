@@ -298,4 +298,15 @@ QListWidget#ListaEnlaces::item:selected {
     background: #d6e9f8;
     color: #063a6d;
 }
+QProgressBar#BarraProgreso {
+    border: none;
+    background: #d7ebe1;
+    border-radius: 3px;
+    min-height: 6px;
+    max-height: 6px;
+}
+QProgressBar#BarraProgreso::chunk {
+    background: #0f6b45;
+    border-radius: 3px;
+}
 """

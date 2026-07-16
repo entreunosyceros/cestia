@@ -33,6 +33,7 @@ from cestia.interfaz.paginas import (
     PaginaIA,
     PaginaProducto,
 )
+from cestia.interfaz.progreso import crear_barra_progreso, mostrar_progreso
 
 RUTA_LOGO_MINI = Path(__file__).resolve().parents[2] / "img" / "logomini.png"
 
@@ -105,7 +106,14 @@ class VentanaPrincipal(QMainWindow):
             self.botones_nav.append(boton)
         lateral.addStretch()
         envoltorio.addWidget(barra)
-        envoltorio.addWidget(self.pila, 1)
+        contenido = QWidget()
+        columna = QVBoxLayout(contenido)
+        columna.setContentsMargins(0, 0, 0, 0)
+        columna.setSpacing(0)
+        self.progreso = crear_barra_progreso()
+        columna.addWidget(self.progreso)
+        columna.addWidget(self.pila, 1)
+        envoltorio.addWidget(contenido, 1)
 
         self.pagina_busqueda.abrir_producto.connect(self.mostrar_producto)
         self.pagina_comparador.abrir_producto.connect(self.mostrar_producto)
@@ -142,20 +150,27 @@ class VentanaPrincipal(QMainWindow):
         return logo
 
     def _ir_a(self, indice_nav: int, pagina: QWidget) -> None:
-        self.pila.setCurrentWidget(pagina)
-        for i, boton in enumerate(self.botones_nav):
-            boton.setProperty("activo", "true" if i == indice_nav else "false")
-            boton.style().unpolish(boton)
-            boton.style().polish(boton)
-        if hasattr(pagina, "actualizar"):
-            pagina.actualizar()
+        mostrar_progreso(self.progreso, True)
+        try:
+            self.pila.setCurrentWidget(pagina)
+            for i, boton in enumerate(self.botones_nav):
+                boton.setProperty("activo", "true" if i == indice_nav else "false")
+                boton.style().unpolish(boton)
+                boton.style().polish(boton)
+            if hasattr(pagina, "actualizar"):
+                pagina.actualizar()
+        finally:
+            mostrar_progreso(self.progreso, False)
 
     def mostrar_producto(self, id_producto: str) -> None:
+        mostrar_progreso(self.progreso, True)
         self.pila.setCurrentWidget(self.pagina_producto)
         for boton in self.botones_nav:
             boton.setProperty("activo", "false")
             boton.style().unpolish(boton)
             boton.style().polish(boton)
+        # La ficha gestiona su propia barra mientras carga en segundo plano
+        mostrar_progreso(self.progreso, False)
         self.pagina_producto.cargar(id_producto)
 
     def _anadir_cesta(self, id_producto: str) -> None:
