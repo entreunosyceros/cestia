@@ -69,7 +69,7 @@ class VentanaPrincipal(QMainWindow):
         self.pagina_producto = PaginaProducto(self.catalogo, self.repositorio)
         self.pagina_cesta = PaginaCesta(self.repositorio)
         self.pagina_historial = PaginaHistorial(self.repositorio)
-        self.pagina_comparador = PaginaComparador(self.repositorio)
+        self.pagina_comparador = PaginaComparador(self.repositorio, self.catalogo)
         self.pagina_alertas = PaginaAlertas(self.repositorio, self.catalogo)
         self.pagina_estadisticas = PaginaEstadisticas(self.repositorio)
         self.pagina_ia = PaginaIA(self.asistente)
@@ -110,6 +110,7 @@ class VentanaPrincipal(QMainWindow):
         self.pagina_busqueda.abrir_producto.connect(self.mostrar_producto)
         self.pagina_comparador.abrir_producto.connect(self.mostrar_producto)
         self.pagina_escaner.abrir_producto.connect(self.mostrar_producto)
+        self.pagina_producto.abrir_producto.connect(self.mostrar_producto)
         self.pagina_producto.back.clicked.connect(
             lambda: self._ir_a(0, self.pagina_busqueda)
         )

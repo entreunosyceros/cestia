@@ -6,20 +6,23 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -27,7 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cestia.interfaz.utilidades import formatear_euros, cargar_miniatura, color_nutri
+from cestia.interfaz.nutriscore import GraficoNutriScore
+from cestia.interfaz.utilidades import formatear_euros, cargar_miniatura
 from cestia.interfaz.trabajadores import ejecutar_en_hilo
 
 
@@ -62,9 +66,16 @@ class PaginaBusqueda(QWidget):
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["", "Producto", "Tienda", "Precio", "€/ud ref.", "Marca"]
+            ["", "Producto", "Supermercado", "Precio", "€/ud ref.", "Marca"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 56)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellDoubleClicked.connect(self._open_row)
@@ -112,8 +123,9 @@ class PaginaBusqueda(QWidget):
             self.table.setItem(
                 i, 1, QTableWidgetItem(p.get("nombre") or p.get("name") or "")
             )
-            tienda = (p.get("tienda") or "mercadona").capitalize()
-            self.table.setItem(i, 2, QTableWidgetItem(tienda))
+            item_tienda = QTableWidgetItem(self._nombre_supermercado(p))
+            item_tienda.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, 2, item_tienda)
             self.table.setItem(
                 i,
                 3,
@@ -145,10 +157,23 @@ class PaginaBusqueda(QWidget):
         if 0 <= row < len(self._results):
             self.abrir_producto.emit(self._results[row]["id"])
 
+    @staticmethod
+    def _nombre_supermercado(producto: dict[str, Any]) -> str:
+        tienda = (producto.get("tienda") or "").strip().lower()
+        id_producto = str(producto.get("id") or "")
+        if tienda == "carrefour" or id_producto.startswith("cf:"):
+            return "Carrefour"
+        if tienda == "mercadona" or id_producto.isdigit():
+            return "Mercadona"
+        if tienda:
+            return tienda.capitalize()
+        return "Mercadona"
+
 
 class PaginaProducto(QWidget):
     anadir_a_cesta = Signal(str)
     crear_alerta = Signal(str, float)
+    abrir_producto = Signal(str)
 
     def __init__(self, catalogo, repositorio, parent=None) -> None:
         super().__init__(parent)
@@ -157,30 +182,63 @@ class PaginaProducto(QWidget):
         self.product: dict[str, Any] | None = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.setObjectName("PaginaProducto")
+        self.setAutoFillBackground(True)
+        self._aplicar_paleta_clara(self)
+
         top = QHBoxLayout()
+        top.setContentsMargins(16, 12, 16, 8)
         self.back = QPushButton("← Volver")
         self.back.setProperty("secundario", True)
         top.addWidget(self.back)
         top.addStretch()
         layout.addLayout(top)
 
+        scroll = QScrollArea()
+        scroll.setObjectName("ScrollFicha")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._aplicar_paleta_clara(scroll)
+        layout.addWidget(scroll, 1)
+
+        contenido = QWidget()
+        contenido.setObjectName("FichaProducto")
+        contenido.setAutoFillBackground(True)
+        self._aplicar_paleta_clara(contenido)
+        scroll.setWidget(contenido)
+        viewport = scroll.viewport()
+        if viewport is not None:
+            viewport.setAutoFillBackground(True)
+            self._aplicar_paleta_clara(viewport)
+        ficha = QVBoxLayout(contenido)
+        ficha.setContentsMargins(16, 4, 16, 24)
+        ficha.setSpacing(12)
+
         body = QHBoxLayout()
+        body.setSpacing(20)
         self.image = QLabel()
+        self.image.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         cargar_miniatura(self.image, None, 220)
-        body.addWidget(self.image)
+        body.addWidget(self.image, 0, Qt.AlignTop)
 
         info = QVBoxLayout()
+        info.setSpacing(10)
         self.title = QLabel("Producto")
         self.title.setObjectName("TituloPagina")
         self.title.setWordWrap(True)
         self.meta = QLabel("")
         self.meta.setObjectName("Atenuado")
+        self.meta.setWordWrap(True)
         self.price = QLabel("")
         self.price.setObjectName("Precio")
         self.bulk = QLabel("")
         self.bulk.setObjectName("Atenuado")
-        self.nutri = QLabel("")
-        self.nutri.setObjectName("Nutri")
+        self.nutri = GraficoNutriScore()
+        self.nutri.hide()
         self.compare = QLabel("")
         self.compare.setWordWrap(True)
         info.addWidget(self.title)
@@ -204,25 +262,72 @@ class PaginaProducto(QWidget):
         actions.addWidget(self.btn_cart)
         actions.addWidget(self.alert_price)
         actions.addWidget(self.btn_alert)
+        actions.addStretch()
         info.addLayout(actions)
 
         self.ingredientes = QPlainTextEdit()
         self.ingredientes.setReadOnly(True)
-        self.alergenos = QLabel("")
-        self.alergenos.setWordWrap(True)
-        self.nutrition = QLabel("")
-        self.nutrition.setWordWrap(True)
-        self.alts = QListWidget()
+        self.ingredientes.setMaximumHeight(120)
         info.addWidget(QLabel("Ingredientes"))
         info.addWidget(self.ingredientes)
-        info.addWidget(QLabel("Alérgenos"))
-        info.addWidget(self.alergenos)
-        info.addWidget(QLabel("Nutrición (por 100 g, Open Food Facts si disponible)"))
-        info.addWidget(self.nutrition)
-        info.addWidget(QLabel("Alternativas más baratas"))
-        info.addWidget(self.alts, 1)
+
+        panel_alergenos = QFrame()
+        panel_alergenos.setObjectName("PanelAlergenos")
+        panel_layout = QVBoxLayout(panel_alergenos)
+        panel_layout.setContentsMargins(14, 12, 14, 12)
+        panel_layout.setSpacing(6)
+        titulo_alergenos = QLabel("⚠ Alérgenos")
+        titulo_alergenos.setObjectName("TituloAlergenos")
+        self.alergenos = QLabel("")
+        self.alergenos.setObjectName("TextoAlergenos")
+        self.alergenos.setWordWrap(True)
+        self.alergenos.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        panel_layout.addWidget(titulo_alergenos)
+        panel_layout.addWidget(self.alergenos)
+        info.addWidget(panel_alergenos)
+
+        panel_nutricion = QFrame()
+        panel_nutricion.setObjectName("PanelNutricion")
+        nut_layout = QVBoxLayout(panel_nutricion)
+        nut_layout.setContentsMargins(14, 12, 14, 12)
+        nut_layout.setSpacing(6)
+        titulo_nut = QLabel("Nutrición (por 100 g)")
+        titulo_nut.setObjectName("TituloNutricion")
+        pista_nut = QLabel("Valores de Open Food Facts cuando están disponibles")
+        pista_nut.setObjectName("PistaNutricion")
+        self.nutrition = QLabel("")
+        self.nutrition.setObjectName("TextoNutricion")
+        self.nutrition.setWordWrap(True)
+        self.nutrition.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        nut_layout.addWidget(titulo_nut)
+        nut_layout.addWidget(pista_nut)
+        nut_layout.addWidget(self.nutrition)
+        info.addWidget(panel_nutricion)
+
+        panel_alts = QFrame()
+        panel_alts.setObjectName("PanelAlternativas")
+        alts_layout = QVBoxLayout(panel_alts)
+        alts_layout.setContentsMargins(14, 12, 14, 12)
+        alts_layout.setSpacing(6)
+        titulo_alts = QLabel("Alternativas más baratas")
+        titulo_alts.setObjectName("TituloAlternativas")
+        pista_alts = QLabel("Pulsa un producto para abrir su ficha")
+        pista_alts.setObjectName("PistaAlternativas")
+        self.alts = QListWidget()
+        self.alts.setObjectName("ListaEnlaces")
+        self.alts.setMinimumHeight(120)
+        self.alts.setMaximumHeight(220)
+        self.alts.setCursor(Qt.PointingHandCursor)
+        self.alts.itemClicked.connect(self._abrir_alternativa)
+        self.alts.itemActivated.connect(self._abrir_alternativa)
+        alts_layout.addWidget(titulo_alts)
+        alts_layout.addWidget(pista_alts)
+        alts_layout.addWidget(self.alts)
+        info.addWidget(panel_alts)
+
+        info.addStretch(1)
         body.addLayout(info, 1)
-        layout.addLayout(body, 1)
+        ficha.addLayout(body)
 
     def cargar(self, id_producto: str) -> None:
         self.title.setText("Cargando…")
@@ -243,7 +348,7 @@ class PaginaProducto(QWidget):
         meta_bits = [
             x
             for x in [
-                (product.get("tienda") or "mercadona").capitalize(),
+                PaginaBusqueda._nombre_supermercado(product),
                 product.get("marca") or product.get("brand"),
                 product.get("envase") or product.get("packaging"),
                 product.get("ean"),
@@ -259,15 +364,7 @@ class PaginaProducto(QWidget):
             )
         else:
             self.bulk.setText("")
-        grade = product.get("nutriscore")
-        if grade:
-            self.nutri.setText(f"Nutri-Score {grade}")
-            self.nutri.setStyleSheet(
-                f"QLabel#Nutri {{ background:{color_nutri(grade)}; color:white; }}"
-            )
-            self.nutri.show()
-        else:
-            self.nutri.hide()
+        self.nutri.establecer_grado(product.get("nutriscore"))
 
         if product.get("precio_unidad") if product.get("precio_unidad") is not None else product.get("unit_price") is not None:
             self.alert_price.setValue(max(0.01, float(product.get("precio_unidad") or product.get("unit_price")) * 0.9))
@@ -293,27 +390,87 @@ class PaginaProducto(QWidget):
             self.compare.setText("")
 
         self.ingredientes.setPlainText(product.get("ingredientes") or product.get("ingredients") or "Sin datos")
-        self.alergenos.setText(product.get("alergenos") or product.get("allergens") or "Sin datos de alérgenos")
-        nut_parts = []
-        mapping = [
-            ("energia_kcal", "kcal"),
-            ("proteinas", "g prot."),
-            ("hidratos", "g hidr."),
-            ("grasas", "g grasas"),
-            ("fibra", "g fibra"),
-            ("azucares", "g azúcares"),
-            ("sal", "g sal"),
-        ]
-        for key, label in mapping:
-            if product.get(key) is not None:
-                nut_parts.append(f"{product[key]:.1f} {label}")
-        self.nutrition.setText(" · ".join(nut_parts) if nut_parts else "Sin tabla nutricional (aún)")
+        self._mostrar_alergenos(
+            product.get("alergenos") or product.get("allergens")
+        )
+        self._mostrar_nutricion(product)
 
         self.alts.clear()
-        for a in alts:
-            self.alts.addItem(
-                f"{formatear_euros(a.get('precio_unidad') if a.get('precio_unidad') is not None else a.get('unit_price'))} — {a.get('nombre') or a.get('name')}"
+        if not alts:
+            vacio = QListWidgetItem("No hay alternativas más baratas guardadas")
+            vacio.setFlags(Qt.NoItemFlags)
+            self.alts.addItem(vacio)
+        else:
+            for a in alts:
+                precio = formatear_euros(
+                    a.get("precio_unidad")
+                    if a.get("precio_unidad") is not None
+                    else a.get("unit_price")
+                )
+                nombre = a.get("nombre") or a.get("name") or a.get("id")
+                tienda = PaginaBusqueda._nombre_supermercado(a)
+                item = QListWidgetItem(f"{precio} — {nombre} · {tienda}")
+                item.setData(Qt.UserRole, a.get("id"))
+                item.setToolTip("Abrir ficha del producto")
+                self.alts.addItem(item)
+
+    def _mostrar_alergenos(self, texto: str | None) -> None:
+        limpio = (texto or "").strip()
+        if not limpio or limpio.lower() in {"sin datos", "sin datos de alérgenos"}:
+            self.alergenos.setText("Sin datos de alérgenos")
+            self.alergenos.setProperty("vacio", "true")
+        else:
+            self.alergenos.setText(limpio)
+            self.alergenos.setProperty("vacio", "false")
+        self.alergenos.style().unpolish(self.alergenos)
+        self.alergenos.style().polish(self.alergenos)
+
+    def _mostrar_nutricion(self, product: dict[str, Any]) -> None:
+        mapping = [
+            ("energia_kcal", "Energía", "kcal"),
+            ("proteinas", "Proteínas", "g"),
+            ("hidratos", "Hidratos", "g"),
+            ("grasas", "Grasas", "g"),
+            ("fibra", "Fibra", "g"),
+            ("azucares", "Azúcares", "g"),
+            ("sal", "Sal", "g"),
+        ]
+        filas = []
+        for key, nombre, unidad in mapping:
+            if product.get(key) is not None:
+                filas.append(
+                    f"<tr><td class='n'>{nombre}</td>"
+                    f"<td class='v'><b>{product[key]:.1f}</b> {unidad}</td></tr>"
+                )
+        if filas:
+            self.nutrition.setText(
+                "<table cellspacing='0' cellpadding='4'>"
+                + "".join(filas)
+                + "</table>"
             )
+            self.nutrition.setProperty("vacio", "false")
+        else:
+            self.nutrition.setText("Sin tabla nutricional (aún)")
+            self.nutrition.setProperty("vacio", "true")
+        self.nutrition.style().unpolish(self.nutrition)
+        self.nutrition.style().polish(self.nutrition)
+
+    def _abrir_alternativa(self, item: QListWidgetItem) -> None:
+        id_producto = item.data(Qt.UserRole)
+        if id_producto:
+            self.abrir_producto.emit(str(id_producto))
+
+    @staticmethod
+    def _aplicar_paleta_clara(widget: QWidget) -> None:
+        fondo = QColor("#eef6f1")
+        texto = QColor("#14201a")
+        paleta = widget.palette()
+        paleta.setColor(QPalette.Window, fondo)
+        paleta.setColor(QPalette.Base, QColor("#ffffff"))
+        paleta.setColor(QPalette.Text, texto)
+        paleta.setColor(QPalette.WindowText, texto)
+        paleta.setColor(QPalette.ButtonText, texto)
+        widget.setPalette(paleta)
 
     def _cart(self) -> None:
         if self.product:
@@ -450,48 +607,134 @@ class PaginaHistorial(QWidget):
 class PaginaComparador(QWidget):
     abrir_producto = Signal(str)
 
-    def __init__(self, repositorio, parent=None) -> None:
+    def __init__(self, repositorio, catalogo=None, parent=None) -> None:
         super().__init__(parent)
         self.repositorio = repositorio
+        self.catalogo = catalogo
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Comparador de precios", objectName="TituloPagina"))
         layout.addWidget(
-            QLabel("Evolución respecto a hace ~6 meses (según tu historial local)", objectName="Atenuado")
+            QLabel(
+                "Evolución respecto a hace ~6 meses (según tu historial local)",
+                objectName="Atenuado",
+            )
         )
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Producto", "Antes", "Hoy", "Cambio", "ID"])
+        self.table.setHorizontalHeaderLabels(
+            ["Producto", "Antes", "Hoy", "Cambio", "ID"]
+        )
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.cellDoubleClicked.connect(
-            lambda r, _c: self.abrir_producto.emit(self.table.item(r, 4).text())
-        )
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setColumnHidden(4, True)
+        self.table.cellDoubleClicked.connect(self._abrir_fila)
         layout.addWidget(self.table, 1)
-        btn = QPushButton("Actualizar")
-        btn.setProperty("secundario", True)
-        btn.clicked.connect(self.actualizar)
-        layout.addWidget(btn, alignment=Qt.AlignLeft)
+
+        self.status = QLabel("")
+        self.status.setObjectName("Atenuado")
+        layout.addWidget(self.status)
+
+        row = QHBoxLayout()
+        self.btn_actualizar = QPushButton("Actualizar")
+        self.btn_actualizar.clicked.connect(self.actualizar_precios)
+        self.btn_limpiar = QPushButton("Limpiar lista")
+        self.btn_limpiar.setProperty("secundario", True)
+        self.btn_limpiar.clicked.connect(self.limpiar)
+        row.addWidget(self.btn_actualizar)
+        row.addWidget(self.btn_limpiar)
+        row.addStretch()
+        layout.addLayout(row)
 
     def actualizar(self) -> None:
-        products = self.repositorio.productos_con_historial(80)
-        rows = []
-        for p in products:
+        """Recarga la lista desde el historial local (al entrar en la página)."""
+        self._mostrar_filas(self._filas_locales())
+
+    def actualizar_precios(self) -> None:
+        """Refresca precios en las tiendas y vuelve a cargar la comparación."""
+        self.btn_actualizar.setEnabled(False)
+        self.status.setText("Actualizando precios en las tiendas…")
+        ids = [p["id"] for p in self.repositorio.productos_con_historial(80)]
+
+        def work():
+            if self.catalogo is not None:
+                for id_producto in ids:
+                    try:
+                        self.catalogo.obtener_producto(id_producto, enriquecer=False)
+                    except Exception:  # noqa: BLE001
+                        continue
+            return True
+
+        def ok(_resultado) -> None:
+            self.btn_actualizar.setEnabled(True)
+            self._mostrar_filas(self._filas_locales())
+
+        def error(mensaje: str) -> None:
+            self.btn_actualizar.setEnabled(True)
+            self._mostrar_filas(self._filas_locales())
+            self.status.setText(f"Error al actualizar: {mensaje}")
+
+        if self.catalogo is None or not ids:
+            self.btn_actualizar.setEnabled(True)
+            self._mostrar_filas(self._filas_locales())
+            return
+
+        ejecutar_en_hilo(work, ok, error)
+
+    def _filas_locales(self) -> list:
+        filas = []
+        for p in self.repositorio.productos_con_historial(80):
             cmp_ = self.repositorio.comparar_precio(p["id"], dias_atras=180)
             if not cmp_ or cmp_.get("precio_antiguo") is None:
                 continue
-            rows.append(cmp_)
-        self.table.setRowCount(len(rows))
-        for i, c in enumerate(rows):
-            prod = c["product"]
+            filas.append(cmp_)
+        return filas
+
+    def _mostrar_filas(self, filas: list) -> None:
+        self._rellenar(filas)
+        if filas:
+            self.status.setText(
+                f"{len(filas)} productos con historial de precios. "
+                "Doble clic para abrir la ficha."
+            )
+        else:
+            self.status.setText(
+                "No hay productos con historial aún. "
+                "Busca productos para ir guardando precios."
+            )
+
+    def limpiar(self) -> None:
+        self.table.setRowCount(0)
+        self.status.setText("Lista vacía. Pulsa Actualizar para volver a cargarla.")
+
+    def _rellenar(self, filas: list) -> None:
+        from PySide6.QtGui import QBrush, QColor
+
+        self.table.setRowCount(len(filas))
+        for i, c in enumerate(filas):
+            prod = c.get("producto") or c.get("product") or {}
             pct = c.get("cambio_pct")
-            self.table.setItem(i, 0, QTableWidgetItem(prod.get("nombre") or prod.get("name")))
-            self.table.setItem(i, 1, QTableWidgetItem(formatear_euros(c["precio_antiguo"])))
-            self.table.setItem(i, 2, QTableWidgetItem(formatear_euros(c["precio_nuevo"])))
+            if pct is None:
+                pct = c.get("change_pct")
+            nombre = prod.get("nombre") or prod.get("name") or prod.get("id") or ""
+            self.table.setItem(i, 0, QTableWidgetItem(str(nombre)))
+            self.table.setItem(
+                i, 1, QTableWidgetItem(formatear_euros(c.get("precio_antiguo")))
+            )
+            self.table.setItem(
+                i, 2, QTableWidgetItem(formatear_euros(c.get("precio_nuevo")))
+            )
             txt = f"{pct:+.1f} %" if pct is not None else "—"
             item = QTableWidgetItem(txt)
             if pct is not None:
-                item.setForeground(Qt.red if pct > 0 else Qt.darkGreen)
+                color = QColor("#b42318") if pct > 0 else QColor("#0f6b45")
+                item.setForeground(QBrush(color))
             self.table.setItem(i, 3, item)
-            self.table.setItem(i, 4, QTableWidgetItem(prod["id"]))
+            self.table.setItem(i, 4, QTableWidgetItem(str(prod.get("id") or "")))
+
+    def _abrir_fila(self, fila: int, _col: int) -> None:
+        item = self.table.item(fila, 4)
+        if item and item.text():
+            self.abrir_producto.emit(item.text())
 
 
 class PaginaAlertas(QWidget):
@@ -582,6 +825,31 @@ class PaginaEstadisticas(QWidget):
             self._has_mpl = False
             layout.addWidget(QLabel("Matplotlib no disponible para gráficas."))
 
+        layout.addWidget(QLabel("Gasto semanal de compra"))
+        pista = QLabel("Semanas ISO (lunes–domingo), según las compras guardadas")
+        pista.setObjectName("Atenuado")
+        layout.addWidget(pista)
+
+        self.tabla_semanal = QTableWidget(0, 5)
+        self.tabla_semanal.setHorizontalHeaderLabels(
+            ["Semana", "Desde", "Hasta", "Compras", "Gasto"]
+        )
+        header = self.tabla_semanal.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.tabla_semanal.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tabla_semanal.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tabla_semanal.setMinimumHeight(160)
+        self.tabla_semanal.setMaximumHeight(240)
+        layout.addWidget(self.tabla_semanal)
+
+        self.resumen_semanal = QLabel("")
+        self.resumen_semanal.setObjectName("Atenuado")
+        layout.addWidget(self.resumen_semanal)
+
         btn = QPushButton("Actualizar")
         btn.setProperty("secundario", True)
         btn.clicked.connect(self.actualizar)
@@ -589,6 +857,7 @@ class PaginaEstadisticas(QWidget):
 
     def actualizar(self) -> None:
         self.insight.setText(self.repositorio.insight_gastos())
+        self._actualizar_tabla_semanal()
         if not self._has_mpl:
             return
         summary = self.repositorio.resumen_gastos()
@@ -637,6 +906,37 @@ class PaginaEstadisticas(QWidget):
             )
 
         self.canvas.draw_idle()
+
+    def _actualizar_tabla_semanal(self) -> None:
+        semanas = self.repositorio.gasto_semanal(26)
+        self.tabla_semanal.setRowCount(len(semanas))
+        for i, s in enumerate(semanas):
+            self.tabla_semanal.setItem(i, 0, QTableWidgetItem(s["semana"]))
+            self.tabla_semanal.setItem(i, 1, QTableWidgetItem(self._fecha_es(s["desde"])))
+            self.tabla_semanal.setItem(i, 2, QTableWidgetItem(self._fecha_es(s["hasta"])))
+            self.tabla_semanal.setItem(i, 3, QTableWidgetItem(str(s["compras"])))
+            self.tabla_semanal.setItem(
+                i, 4, QTableWidgetItem(formatear_euros(s["total"]))
+            )
+        if not semanas:
+            self.resumen_semanal.setText(
+                "Aún no hay compras guardadas para calcular el gasto semanal."
+            )
+            return
+        ultima = semanas[0]
+        media = sum(float(s["total"]) for s in semanas) / len(semanas)
+        self.resumen_semanal.setText(
+            f"Última semana ({ultima['semana']}): {formatear_euros(ultima['total'])} · "
+            f"Media de las {len(semanas)} semanas mostradas: {formatear_euros(media)}"
+        )
+
+    @staticmethod
+    def _fecha_es(iso: str) -> str:
+        try:
+            anio, mes, dia = iso.split("-")
+            return f"{dia}/{mes}/{anio}"
+        except ValueError:
+            return iso
 
 
 class PaginaIA(QWidget):
@@ -1067,7 +1367,7 @@ class PaginaAbout(QWidget):
             "• Historial de compras e insights de gasto\n"
             "• Comparador de precios (evolución ~6 meses)\n"
             "• Alertas cuando un producto baja de un precio\n"
-            "• Estadísticas: gasto mensual/anual/categoría e inflación de cesta\n"
+            "• Estadísticas: gasto semanal/mensual/anual/categoría e inflación de cesta\n"
             "• IA con Google Gemini (menús, presupuestos, listas)\n"
             "• Escáner de códigos de barras (webcam o EAN)\n"
             "• Configuración: clave Gemini, modelo y tiendas activas"

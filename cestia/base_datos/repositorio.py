@@ -370,11 +370,14 @@ class Repositorio:
             ORDER BY total DESC
             """
         ).fetchall()
+        semanal = self.gasto_semanal()
         return {
             "mensual": mensual,
             "monthly": mensual,
             "anual": [{"anio": a, "year": a, "total": t} for a, t in sorted(anual.items())],
             "yearly": [{"anio": a, "year": a, "total": t} for a, t in sorted(anual.items())],
+            "semanal": semanal,
+            "weekly": semanal,
             "por_categoria": [
                 {"categoria": f["categoria"], "category": f["categoria"], "total": f["total"]}
                 for f in por_cat
@@ -384,6 +387,47 @@ class Repositorio:
                 for f in por_cat
             ],
         }
+
+    def gasto_semanal(self, limite: int = 26) -> list[dict[str, Any]]:
+        """Gasto agrupado por semana ISO (lunes–domingo), más recientes primero."""
+        filas = self.conexion.execute(
+            """
+            SELECT comprado_en, total
+            FROM compras
+            ORDER BY comprado_en
+            """
+        ).fetchall()
+        if not filas:
+            return []
+
+        semanas: dict[tuple[int, int], dict[str, Any]] = {}
+        for fila in filas:
+            bruto = (fila["comprado_en"] or "")[:19]
+            try:
+                fecha = datetime.fromisoformat(bruto)
+            except ValueError:
+                continue
+            anio_iso, num_semana, _ = fecha.isocalendar()
+            clave = (anio_iso, num_semana)
+            lunes = fecha.date() - timedelta(days=fecha.weekday())
+            domingo = lunes + timedelta(days=6)
+            if clave not in semanas:
+                semanas[clave] = {
+                    "semana": f"{anio_iso}-W{num_semana:02d}",
+                    "desde": lunes.isoformat(),
+                    "hasta": domingo.isoformat(),
+                    "total": 0.0,
+                    "compras": 0,
+                }
+            semanas[clave]["total"] += float(fila["total"] or 0)
+            semanas[clave]["compras"] += 1
+
+        ordenadas = sorted(
+            semanas.values(),
+            key=lambda s: s["desde"],
+            reverse=True,
+        )
+        return ordenadas[:limite]
 
     def insight_gastos(self) -> str:
         resumen = self.resumen_gastos()
