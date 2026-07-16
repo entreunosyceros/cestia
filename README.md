@@ -247,10 +247,6 @@ Issues y mejoras: [github.com/entreunosyceros/cestia](https://github.com/entreun
 
 Si abres un issue sobre una tienda, indica sistema operativo, versión de Python y un ejemplo de búsqueda que falle.
 
-## Licencia
-
-Este proyecto se distribuye bajo licencia GNU General Public License. Consulta el archivo LICENSE para más detalles.
-
 ## Autor
 
 Desarrollado por entreunosyceros.
