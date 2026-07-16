@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CestIA{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <header class="site-header">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">Cest<span>IA</span></span>
+    </a>
+    <div class="header-meta">
+      <span class="pill warehouse" title="Almacén / zona de precios">{{ warehouse }}</span>
+      {% if health and health.ok %}
+        <span class="pill ok" title="API respondiendo">API OK</span>
+      {% elif health %}
+        <span class="pill bad" title="{{ health.error or 'Fallo en la API' }}">API ↓</span>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="shell">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      Uso personal · API no oficial de Mercadona · puede cambiar sin aviso · v{{ app_version }}
+    </p>
+  </footer>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

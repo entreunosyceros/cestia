@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }} — CestIA{% endblock %}
+{% block content %}
+<nav class="crumb">
+  <a href="/">Inicio</a>
+  <span>/</span>
+  {% if product.raw_categories %}
+  <span>{{ product.raw_categories[0].name }}</span>
+  <span>/</span>
+  {% endif %}
+  <span>{{ product.name }}</span>
+</nav>
+
+<article class="product-detail">
+  <div class="product-gallery">
+    {% if photos %}
+    <img src="{{ photos[0].regular or photos[0].thumbnail or product.thumbnail }}" alt="{{ product.name }}">
+    {% elif product.thumbnail %}
+    <img src="{{ product.thumbnail }}" alt="{{ product.name }}">
+    {% else %}
+    <div class="img-fallback large" aria-hidden="true"></div>
+    {% endif %}
+  </div>
+
+  <div class="product-info">
+    <p class="eyebrow">{{ product.brand or "Mercadona" }}{% if product.packaging %} · {{ product.packaging }}{% endif %}</p>
+    <h1>{{ product.name }}</h1>
+    <p class="price xl">
+      <strong>{{ format_eur(product.unit_price) }}</strong>
+      {% if product.previous_unit_price and product.price_decreased %}
+      <span class="old">{{ format_eur(product.previous_unit_price) }}</span>
+      {% endif %}
+    </p>
+    {% if product.bulk_price and product.size_format %}
+    <p class="muted">{{ format_eur(product.bulk_price) }} / {{ product.size_format }}{% if product.unit_size %} · {{ product.unit_size }} {{ product.size_format }}{% endif %}</p>
+    {% endif %}
+
+    <dl class="meta-list">
+      <div><dt>ID</dt><dd>{{ product.id }}</dd></div>
+      {% if raw.ean %}<div><dt>EAN</dt><dd>{{ raw.ean }}</dd></div>{% endif %}
+      {% if details.origin %}<div><dt>Origen</dt><dd>{{ details.origin }}</dd></div>{% endif %}
+      {% if raw.price_instructions and raw.price_instructions.tax_percentage %}
+      <div><dt>IVA</dt><dd>{{ raw.price_instructions.tax_percentage | float }}%</dd></div>
+      {% endif %}
+    </dl>
+
+    {% if details.description or details.legal_name %}
+    <div class="prose">
+      <h2>Detalle</h2>
+      <p>{{ details.description or details.legal_name }}</p>
+      {% if details.mandatory_mentions %}
+      <p class="muted small">{{ details.mandatory_mentions }}</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if product.share_url %}
+    <p><a class="ext-link" href="{{ product.share_url }}" target="_blank" rel="noopener">Ver en tienda.mercadona.es</a></p>
+    {% endif %}
+  </div>
+</article>
+{% endblock %}

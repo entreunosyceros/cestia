@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}CestIA — precios{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1 class="hero-brand">CestIA</h1>
+  <p class="hero-lead">Consulta precios y productos de Mercadona desde la API interna de la tienda online.</p>
+  <form class="search-form" action="/" method="get" role="search">
+    <label class="sr-only" for="q">Buscar producto</label>
+    <input id="q" name="q" type="search" value="{{ query }}" placeholder="Buscar: leche, aceite, pan…" autocomplete="off" autofocus>
+    <button type="submit">Buscar</button>
+  </form>
+</section>
+
+{% if error %}
+  <p class="banner error">{{ error }}</p>
+{% endif %}
+
+{% if query %}
+<section class="section">
+  <header class="section-head">
+    <h2>Resultados para «{{ query }}»</h2>
+    <p>{{ nb_hits }} productos encontrados</p>
+  </header>
+  {% if results %}
+  <div class="product-grid">
+    {% for p in results %}
+      {% include "partials/product_card.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+    <p class="empty">Sin resultados. Prueba otro término.</p>
+  {% endif %}
+</section>
+{% else %}
+<section class="section">
+  <header class="section-head">
+    <h2>Categorías</h2>
+    <p>Explora el catálogo por secciones</p>
+  </header>
+  <div class="category-grid">
+    {% for cat in categories %}
+    <article class="category-block">
+      <h3>{{ cat.name }}</h3>
+      <ul>
+        {% for child in cat.children %}
+        <li><a href="/categoria/{{ child.id }}">{{ child.name }}</a></li>
+        {% endfor %}
+      </ul>
+    </article>
+    {% else %}
+    <p class="empty">No se pudieron cargar las categorías. Revisa <a href="/api/health?force=true">/api/health</a>.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

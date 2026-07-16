@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ category.name }} — CestIA{% endblock %}
+{% block content %}
+<nav class="crumb">
+  <a href="/">Inicio</a>
+  <span>/</span>
+  <span>{{ category.name }}</span>
+</nav>
+
+<section class="section">
+  <header class="section-head">
+    <h1>{{ category.name }}</h1>
+    <p>Precios según almacén {{ warehouse }}</p>
+  </header>
+
+  {% for shelf in shelves %}
+  <div class="shelf">
+    <h2>{{ shelf.name }}</h2>
+    {% if shelf.subtitle %}<p class="muted">{{ shelf.subtitle }}</p>{% endif %}
+    <div class="product-grid">
+      {% for p in shelf.products %}
+        {% include "partials/product_card.html" %}
+      {% else %}
+        <p class="empty">Sin productos en esta subcategoría.</p>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <p class="empty">Esta categoría no tiene productos visibles.</p>
+  {% endfor %}
+</section>
+{% endblock %}

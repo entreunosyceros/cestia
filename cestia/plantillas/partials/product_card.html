@@ -1,0 +1,27 @@
+<a class="product-card" href="/producto/{{ p.id }}">
+  <div class="product-card-media">
+    {% if p.thumbnail %}
+    <img src="{{ p.thumbnail }}" alt="" loading="lazy" width="300" height="300">
+    {% else %}
+    <div class="img-fallback" aria-hidden="true"></div>
+    {% endif %}
+    {% if p.price_decreased %}
+    <span class="badge down">Baja</span>
+    {% elif p.is_new %}
+    <span class="badge new">Nuevo</span>
+    {% endif %}
+  </div>
+  <div class="product-card-body">
+    <h3>{{ p.name }}</h3>
+    {% if p.packaging %}<p class="muted">{{ p.packaging }}</p>{% endif %}
+    <p class="price">
+      <strong>{{ format_eur(p.unit_price) }}</strong>
+      {% if p.previous_unit_price and p.price_decreased %}
+      <span class="old">{{ format_eur(p.previous_unit_price) }}</span>
+      {% endif %}
+    </p>
+    {% if p.bulk_price and p.size_format %}
+    <p class="muted unit">{{ format_eur(p.bulk_price) }}/{{ p.size_format }}</p>
+    {% endif %}
+  </div>
+</a>
