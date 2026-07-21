@@ -27,15 +27,25 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from cestia.interfaz.nutriscore import GraficoNutriScore
 from cestia.interfaz.grafico_precio import GraficoPrecio
-from cestia.interfaz.progreso import crear_barra_progreso, mostrar_progreso
+from cestia.interfaz.progreso import (
+    ProgresoEspera,
+    crear_barra_progreso,
+    crear_barra_progreso_espera,
+    mostrar_progreso,
+)
 from cestia.interfaz.tarjeta import TarjetaModerna
-from cestia.interfaz.utilidades import formatear_euros, cargar_miniatura
+from cestia.interfaz.utilidades import (
+    cargar_miniatura,
+    formatear_euros,
+    mostrar_respuesta_ia,
+)
 from cestia.interfaz.trabajadores import ejecutar_en_hilo
 from cestia.logica.busqueda import (
     agrupar_multi_tienda,
@@ -1273,14 +1283,14 @@ class PaginaIA(QWidget):
         layout.addWidget(
             QLabel(
                 "Opcional. Usa Google Gemini (clave en Configuración). "
-                "Ejemplos: presupuesto semanal, dieta 2200 kcal, lista rica en proteínas.",
+                "Compara precios y planifica la compra en varios supermercados.",
                 objectName="Atenuado",
             )
         )
         self.prompts = QListWidget()
         for text in (
             "Tengo 25 €. ¿Qué puedo comprar para toda la semana?",
-            "Diseña una dieta de 2200 kcal usando productos de Mercadona.",
+            "Diseña una dieta de 2200 kcal con productos de supermercado.",
             "Dame una lista de compra rica en proteínas y barata.",
         ):
             self.prompts.addItem(text)
@@ -1292,10 +1302,15 @@ class PaginaIA(QWidget):
         self.input.setFixedHeight(90)
         layout.addWidget(self.input)
         ask = QPushButton("Preguntar a la IA")
+        self.btn_preguntar = ask
         ask.clicked.connect(self.preguntar)
         layout.addWidget(ask, alignment=Qt.AlignLeft)
-        self.output = QPlainTextEdit()
+        self.progreso_ia = crear_barra_progreso_espera()
+        self._progreso_ia = ProgresoEspera(self.progreso_ia)
+        layout.addWidget(self.progreso_ia)
+        self.output = QTextEdit()
         self.output.setReadOnly(True)
+        self.output.setPlaceholderText("La respuesta aparecerá aquí…")
         layout.addWidget(self.output, 1)
         self.status = QLabel("")
         self.status.setObjectName("Atenuado")
@@ -1305,18 +1320,27 @@ class PaginaIA(QWidget):
         q = self.input.toPlainText().strip()
         if not q:
             return
-        self.status.setText("Pensando…")
-        self.output.setPlainText("")
+        self.btn_preguntar.setEnabled(False)
+        self.status.setText("")
+        self.output.clear()
+        self._progreso_ia.iniciar()
 
         def work():
             ctx = self.asistente.construir_contexto()
             return self.asistente.preguntar(q, ctx)
 
-        ejecutar_en_hilo(
-            work,
-            lambda text: (self.output.setPlainText(text), self.status.setText("Listo")),
-            lambda e: self.status.setText(f"Error: {e}"),
-        )
+        def al_ok(text):
+            mostrar_respuesta_ia(self.output, text)
+            self._progreso_ia.completar()
+            self.btn_preguntar.setEnabled(True)
+            self.status.setText("Listo")
+
+        def al_error(exc):
+            self._progreso_ia.cancelar()
+            self.btn_preguntar.setEnabled(True)
+            self.status.setText(f"Error: {exc}")
+
+        ejecutar_en_hilo(work, al_ok, al_error)
 
 
 class PaginaEscaner(QWidget):
@@ -1469,6 +1493,13 @@ class PaginaConfiguracion(QWidget):
                 objectName="Atenuado",
             )
         )
+        layout.addWidget(
+            QLabel(
+                "Plan gratuito (claves nuevas): usa gemini-3.1-flash-lite o "
+                "gemini-3.5-flash. Los modelos 2.0 y 2.5 ya no admiten proyectos nuevos.",
+                objectName="Atenuado",
+            )
+        )
 
         form = QFormLayout()
         self.campo_clave = QLineEdit()
@@ -1489,11 +1520,8 @@ class PaginaConfiguracion(QWidget):
             "selection-background-color:#0f6b45; selection-color:#ffffff;"
         )
         for modelo in (
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash",
         ):
             self.campo_modelo.addItem(modelo)
 
@@ -1566,7 +1594,7 @@ class PaginaConfiguracion(QWidget):
         probar = QPushButton("Probar conexión")
         probar.setProperty("secundario", True)
         probar.clicked.connect(self.probar)
-        abrir = QPushButton("Abrir AI Studio")
+        abrir = QPushButton("Obtén tu clave Gemini aquí")
         abrir.setProperty("secundario", True)
         abrir.clicked.connect(self._abrir_studio)
         botones.addWidget(guardar)
@@ -1606,6 +1634,9 @@ class PaginaConfiguracion(QWidget):
         clave = self.asistente.obtener_clave()
         self.campo_clave.setText(clave)
         modelo = self.asistente.obtener_modelo()
+        guardado = self.repositorio.obtener_ajuste("gemini_modelo", "").strip()
+        if guardado and guardado != modelo:
+            self.asistente.guardar_modelo(modelo)
         idx = self.campo_modelo.findText(modelo)
         if idx >= 0:
             self.campo_modelo.setCurrentIndex(idx)
@@ -1631,18 +1662,24 @@ class PaginaConfiguracion(QWidget):
             self.estado.setText("Hay una clave configurada.")
         else:
             self.estado.setText("Todavía no hay clave. Configúrala para usar la IA.")
+        self._al_cambiar_ver_clave()
 
-    def _al_cambiar_ver_clave(self, estado) -> None:
-        marcado = estado == Qt.CheckState.Checked
+    def _al_cambiar_ver_clave(self, _estado=None) -> None:
         self.campo_clave.setEchoMode(
-            QLineEdit.Normal if marcado else QLineEdit.Password
+            QLineEdit.EchoMode.Normal
+            if self.ver_clave.isChecked()
+            else QLineEdit.EchoMode.Password
         )
 
     def guardar(self) -> None:
         from cestia.tiendas import CLAVE_TEMA, guardar_tiendas
 
         clave = self.campo_clave.text().strip()
-        modelo = self.campo_modelo.currentText().strip() or "gemini-2.0-flash"
+        from cestia.asistente_ia import MODELO_POR_DEFECTO
+
+        modelo = self.asistente.normalizar_modelo(
+            self.campo_modelo.currentText().strip() or MODELO_POR_DEFECTO
+        )
         self.asistente.guardar_clave(clave)
         self.asistente.guardar_modelo(modelo)
         activas = [
@@ -1709,8 +1746,10 @@ class PaginaConfiguracion(QWidget):
     def probar(self) -> None:
         # Guardar primero lo que hay en pantalla para probar esa clave
         self.asistente.guardar_clave(self.campo_clave.text().strip())
+        from cestia.asistente_ia import MODELO_POR_DEFECTO
+
         self.asistente.guardar_modelo(
-            self.campo_modelo.currentText().strip() or "gemini-2.0-flash"
+            self.campo_modelo.currentText().strip() or MODELO_POR_DEFECTO
         )
         self.estado.setText("Comprobando conexión con Gemini…")
 

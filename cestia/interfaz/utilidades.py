@@ -5,9 +5,9 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPalette, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QLabel, QTextEdit
 
 _gestor_red: QNetworkAccessManager | None = None
 _cache_pixmaps: dict[str, QPixmap] = {}
@@ -211,3 +211,45 @@ def cargar_miniatura(etiqueta: QLabel, url: str | None, tamano: int = 96) -> Non
             _aplicar_pixmap(etiqueta, pix, tamano)
 
     puente.terminado.connect(al_terminar)
+
+
+def mostrar_respuesta_ia(salida: QTextEdit, texto: str) -> None:
+    """Muestra la respuesta del asistente interpretando Markdown."""
+    paleta = salida.palette()
+    color_texto = paleta.color(QPalette.Text).name()
+    color_fondo = paleta.color(QPalette.Base).name()
+    color_acento = paleta.color(QPalette.Highlight).name()
+    color_atenuado = paleta.color(QPalette.PlaceholderText).name()
+    salida.document().setDefaultStyleSheet(
+        f"""
+        body {{ color: {color_texto}; background-color: {color_fondo}; }}
+        h1, h2, h3, h4 {{ color: {color_texto}; margin: 10px 0 6px; font-weight: 700; }}
+        p {{ margin: 6px 0; }}
+        ul, ol {{ margin: 6px 0 6px 18px; }}
+        li {{ margin: 2px 0; }}
+        strong {{ font-weight: 700; }}
+        em {{ font-style: italic; }}
+        code {{
+            font-family: "Consolas", "DejaVu Sans Mono", monospace;
+            background-color: rgba(127, 127, 127, 0.18);
+            padding: 1px 4px;
+            border-radius: 4px;
+        }}
+        pre {{
+            font-family: "Consolas", "DejaVu Sans Mono", monospace;
+            background-color: rgba(127, 127, 127, 0.14);
+            padding: 8px 10px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }}
+        blockquote {{
+            color: {color_atenuado};
+            border-left: 3px solid {color_acento};
+            margin: 8px 0;
+            padding-left: 10px;
+        }}
+        a {{ color: {color_acento}; text-decoration: none; }}
+        hr {{ border: none; border-top: 1px solid rgba(127, 127, 127, 0.35); margin: 10px 0; }}
+        """
+    )
+    salida.setMarkdown((texto or "").strip())

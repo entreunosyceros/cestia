@@ -342,4 +342,21 @@ QProgressBar#BarraProgreso::chunk {
     background: #0f6b45;
     border-radius: 3px;
 }
+QProgressBar#BarraProgresoEspera {
+    border: 1px solid #c5ddd0;
+    background: #ffffff;
+    border-radius: 10px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 2px;
+    color: #0a3d2a;
+    text-align: center;
+}
+QProgressBar#BarraProgresoEspera::chunk {
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #0f6b45, stop: 1 #128554
+    );
+    border-radius: 8px;
+}
 """

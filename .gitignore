@@ -1,8 +1,22 @@
+# Entorno virtual
 .venv/
+
+# Secretos y configuración local (incluye CESTIA_GEMINI_CLAVE)
 .env
-.cache/
+.env.*
+!.env.example
+
+# Datos locales: cesta, historial y clave Gemini guardada en la UI (SQLite)
 datos/
 data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Caché de peticiones HTTP
+.cache/
+
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
