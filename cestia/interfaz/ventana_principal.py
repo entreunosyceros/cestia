@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -19,7 +20,6 @@ from cestia.asistente_ia import AsistenteIA
 from cestia.base_datos import conectar
 from cestia.base_datos.repositorio import Repositorio
 from cestia.catalogo import ServicioCatalogo
-from cestia.interfaz.estilos import HOJA_ESTILOS
 from cestia.interfaz.paginas import (
     PaginaAbout,
     PaginaAlertas,
@@ -33,7 +33,14 @@ from cestia.interfaz.paginas import (
     PaginaIA,
     PaginaProducto,
 )
+from cestia.interfaz.paginas_extras import (
+    PaginaCompararProductos,
+    PaginaFavoritos,
+    PaginaListas,
+)
 from cestia.interfaz.progreso import crear_barra_progreso, mostrar_progreso
+from cestia.interfaz.temas import obtener_hoja_estilos
+from cestia.tiendas import CLAVE_TEMA
 
 RUTA_LOGO_MINI = Path(__file__).resolve().parents[2] / "img" / "logomini.png"
 
@@ -43,7 +50,6 @@ class VentanaPrincipal(QMainWindow):
         super().__init__()
         self.setWindowTitle("CestIA")
         self.resize(1180, 760)
-        self.setStyleSheet(HOJA_ESTILOS)
 
         self.conexion = conectar()
         self.repositorio = Repositorio(self.conexion)
@@ -68,13 +74,16 @@ class VentanaPrincipal(QMainWindow):
         self.pila = QStackedWidget()
         self.pagina_busqueda = PaginaBusqueda(self.catalogo, self.repositorio)
         self.pagina_producto = PaginaProducto(self.catalogo, self.repositorio)
-        self.pagina_cesta = PaginaCesta(self.repositorio)
+        self.pagina_cesta = PaginaCesta(self.repositorio, self.catalogo)
         self.pagina_historial = PaginaHistorial(self.repositorio)
         self.pagina_comparador = PaginaComparador(self.repositorio, self.catalogo)
         self.pagina_alertas = PaginaAlertas(self.repositorio, self.catalogo)
         self.pagina_estadisticas = PaginaEstadisticas(self.repositorio)
         self.pagina_ia = PaginaIA(self.asistente)
         self.pagina_escaner = PaginaEscaner(self.catalogo)
+        self.pagina_favoritos = PaginaFavoritos(self.repositorio)
+        self.pagina_listas = PaginaListas(self.repositorio)
+        self.pagina_comparar = PaginaCompararProductos(self.repositorio)
         self.pagina_configuracion = PaginaConfiguracion(
             self.asistente, self.repositorio
         )
@@ -83,8 +92,11 @@ class VentanaPrincipal(QMainWindow):
         paginas = [
             ("Productos", self.pagina_busqueda),
             ("Cesta", self.pagina_cesta),
+            ("Favoritos", self.pagina_favoritos),
+            ("Listas", self.pagina_listas),
             ("Historial", self.pagina_historial),
             ("Comparador", self.pagina_comparador),
+            ("Comparar", self.pagina_comparar),
             ("Alertas", self.pagina_alertas),
             ("Estadísticas", self.pagina_estadisticas),
             ("IA", self.pagina_ia),
@@ -118,15 +130,47 @@ class VentanaPrincipal(QMainWindow):
         self.pagina_busqueda.abrir_producto.connect(self.mostrar_producto)
         self.pagina_comparador.abrir_producto.connect(self.mostrar_producto)
         self.pagina_escaner.abrir_producto.connect(self.mostrar_producto)
+        self.pagina_favoritos.abrir_producto.connect(self.mostrar_producto)
         self.pagina_producto.abrir_producto.connect(self.mostrar_producto)
         self.pagina_producto.back.clicked.connect(
             lambda: self._ir_a(0, self.pagina_busqueda)
         )
         self.pagina_producto.anadir_a_cesta.connect(self._anadir_cesta)
         self.pagina_producto.crear_alerta.connect(self._anadir_alerta)
+        self.pagina_producto.comparar_producto.connect(self._comparar_producto)
+        self.pagina_producto.anadir_lista.connect(self._anadir_a_lista)
+        self.pagina_configuracion.tema_cambiado.connect(self._aplicar_tema)
+        self._aplicar_tema(self.repositorio.obtener_ajuste(CLAVE_TEMA, "claro"))
 
+        self._configurar_atajos()
         self._ir_a(0, self.pagina_busqueda)
         self._comprobar_alertas_silencioso()
+
+    def _aplicar_tema(self, tema: str) -> None:
+        self.setStyleSheet(obtener_hoja_estilos(tema))
+        self.pagina_producto.aplicar_tema(tema)
+
+    def _atajo_anadir_cesta(self) -> None:
+        if self.pila.currentWidget() == self.pagina_producto:
+            self.pagina_producto.btn_cart.click()
+
+    def _configurar_atajos(self) -> None:
+        QShortcut(QKeySequence("Ctrl+F"), self, self.pagina_busqueda.enfocar_busqueda)
+        QShortcut(QKeySequence("Escape"), self, self._esc_volver)
+        QShortcut(QKeySequence("Ctrl+Return"), self, self._atajo_anadir_cesta)
+        for i in range(min(9, len(self.botones_nav))):
+            QShortcut(
+                QKeySequence(f"Ctrl+{i + 1}"),
+                self,
+                lambda idx=i: self._ir_a(
+                    idx,
+                    self.pila.widget(idx),  # type: ignore[arg-type]
+                ),
+            )
+
+    def _esc_volver(self) -> None:
+        if self.pila.currentWidget() == self.pagina_producto:
+            self._ir_a(0, self.pagina_busqueda)
 
     def _crear_logo_lateral(self) -> QLabel:
         logo = QLabel()
@@ -169,7 +213,6 @@ class VentanaPrincipal(QMainWindow):
             boton.setProperty("activo", "false")
             boton.style().unpolish(boton)
             boton.style().polish(boton)
-        # La ficha gestiona su propia barra mientras carga en segundo plano
         mostrar_progreso(self.progreso, False)
         self.pagina_producto.cargar(id_producto)
 
@@ -188,6 +231,37 @@ class VentanaPrincipal(QMainWindow):
             f"Te avisaré cuando «{nombre}» baje de {objetivo:.2f} €.",
         )
         self.pagina_alertas.actualizar()
+
+    def _comparar_producto(self, producto: object) -> None:
+        self.pagina_comparar.establecer_producto(producto)  # type: ignore[arg-type]
+        self._ir_a(6, self.pagina_comparar)
+
+    def _anadir_a_lista(self, id_producto: str) -> None:
+        listas = self.repositorio.listar_listas_compra()
+        if not listas:
+            nombre, ok = QInputDialog.getText(
+                self, "Lista de la compra", "Nombre de la nueva lista:"
+            )
+            if not ok or not nombre.strip():
+                return
+            id_lista = self.repositorio.crear_lista_compra(nombre.strip())
+        else:
+            nombres = [f"{l['nombre']} ({l.get('num_items', 0)})" for l in listas]
+            nombre, ok = QInputDialog.getItem(
+                self,
+                "Lista de la compra",
+                "Elige una lista:",
+                nombres,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            idx = nombres.index(nombre)
+            id_lista = listas[idx]["id"]
+        self.repositorio.lista_anadir_producto(id_lista, id_producto, 1)
+        QMessageBox.information(self, "Lista", "Producto guardado en la lista.")
+        self.pagina_listas.actualizar()
 
     def _comprobar_alertas_silencioso(self) -> None:
         disparadas = self.repositorio.comprobar_alertas()

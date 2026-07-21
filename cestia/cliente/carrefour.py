@@ -123,12 +123,17 @@ def normalizar_hit_carrefour(item: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         pass
 
+    from cestia.normalizacion import inferir_marca
+
+    nombre = item.get("display_name") or item.get("name") or "Producto Carrefour"
+    marca = inferir_marca(nombre, item.get("brand"))
+
     return {
         "id": f"{PREFIJO_ID}{pid}",
         "id_externo": pid,
         "ean": item.get("ean13") or item.get("ean"),
-        "nombre": item.get("display_name") or item.get("name") or "Producto Carrefour",
-        "marca": item.get("brand"),
+        "nombre": nombre,
+        "marca": marca,
         "envase": item.get("recipient") or "",
         "miniatura": miniatura,
         "url_compartir": url_compartir or None,
@@ -139,8 +144,8 @@ def normalizar_hit_carrefour(item: dict[str, Any]) -> dict[str, Any]:
         "tienda": "carrefour",
         "origen": "carrefour",
         # aliases
-        "name": item.get("display_name") or item.get("name"),
-        "brand": item.get("brand"),
+        "name": nombre,
+        "brand": marca,
         "thumbnail": miniatura,
         "unit_price": precio_unidad,
         "bulk_price": precio_bulto,

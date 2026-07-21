@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -31,9 +32,31 @@ from PySide6.QtWidgets import (
 )
 
 from cestia.interfaz.nutriscore import GraficoNutriScore
+from cestia.interfaz.grafico_precio import GraficoPrecio
 from cestia.interfaz.progreso import crear_barra_progreso, mostrar_progreso
+from cestia.interfaz.tarjeta import TarjetaModerna
 from cestia.interfaz.utilidades import formatear_euros, cargar_miniatura
 from cestia.interfaz.trabajadores import ejecutar_en_hilo
+from cestia.logica.busqueda import (
+    agrupar_multi_tienda,
+    es_rebajado,
+    filtrar_resultados,
+)
+from cestia.logica.cesta_optima import (
+    calcular_cesta_optima_mezclada,
+    calcular_cesta_por_tienda,
+)
+from cestia.tiendas import (
+    alcampo_activo,
+    carrefour_activo,
+    dia_activo,
+    eroski_activo,
+    froiz_activo,
+    gadis_activo,
+    lidl_activo,
+    mercadona_activo,
+    nombre_tienda,
+)
 
 
 class PaginaBusqueda(QWidget):
@@ -44,6 +67,7 @@ class PaginaBusqueda(QWidget):
         self.catalogo = catalogo
         self.repositorio = repositorio
         self._results: list[dict[str, Any]] = []
+        self._raw_results: list[dict[str, Any]] = []
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Productos", objectName="TituloPagina"))
@@ -53,7 +77,7 @@ class PaginaBusqueda(QWidget):
 
         row = QHBoxLayout()
         self.query = QLineEdit()
-        self.query.setPlaceholderText("leche, aceite, café…")
+        self.query.setPlaceholderText("leche, aceite, café… (Ctrl+F)")
         self.query.returnPressed.connect(self.buscar)
         btn = QPushButton("Buscar")
         btn.clicked.connect(self.buscar)
@@ -61,34 +85,101 @@ class PaginaBusqueda(QWidget):
         row.addWidget(btn)
         layout.addLayout(row)
 
+        filtros = QHBoxLayout()
+        self.filtro_tienda = QComboBox()
+        self.filtro_tienda.addItem("Todas las tiendas", "")
+        for clave, etiqueta in [
+            ("mercadona", "Mercadona"),
+            ("carrefour", "Carrefour"),
+            ("alcampo", "Alcampo"),
+            ("froiz", "Froiz"),
+            ("eroski", "Eroski"),
+            ("lidl", "Lidl"),
+            ("dia", "Dia"),
+            ("gadis", "Gadis"),
+        ]:
+            self.filtro_tienda.addItem(etiqueta, clave)
+        self.filtro_nutri = QComboBox()
+        self.filtro_nutri.addItem("Nutri-Score: todos", "")
+        for g in ("A", "B", "C", "D", "E"):
+            self.filtro_nutri.addItem(f"Nutri-Score {g}", g)
+        self.filtro_precio_min = QDoubleSpinBox()
+        self.filtro_precio_min.setPrefix("Min ")
+        self.filtro_precio_min.setSuffix(" €")
+        self.filtro_precio_min.setMaximum(999)
+        self.filtro_precio_max = QDoubleSpinBox()
+        self.filtro_precio_max.setPrefix("Max ")
+        self.filtro_precio_max.setSuffix(" €")
+        self.filtro_precio_max.setMaximum(999)
+        self.filtro_precio_max.setValue(999)
+        self.check_rebajados = QCheckBox("Solo rebajados")
+        self.check_sin_gluten = QCheckBox("Sin gluten")
+        self.check_agrupar = QCheckBox("Comparar entre tiendas")
+        self.check_agrupar.setChecked(True)
+        for w in (
+            self.filtro_tienda,
+            self.filtro_nutri,
+            self.filtro_precio_min,
+            self.filtro_precio_max,
+            self.check_rebajados,
+            self.check_sin_gluten,
+            self.check_agrupar,
+        ):
+            if isinstance(w, QCheckBox):
+                w.stateChanged.connect(self._aplicar_filtros)
+            elif isinstance(w, QComboBox):
+                w.currentIndexChanged.connect(self._aplicar_filtros)
+            elif isinstance(w, QDoubleSpinBox):
+                w.valueChanged.connect(self._aplicar_filtros)
+        filtros.addWidget(self.filtro_tienda)
+        filtros.addWidget(self.filtro_nutri)
+        filtros.addWidget(self.filtro_precio_min)
+        filtros.addWidget(self.filtro_precio_max)
+        filtros.addWidget(self.check_rebajados)
+        filtros.addWidget(self.check_sin_gluten)
+        filtros.addWidget(self.check_agrupar)
+        filtros.addStretch()
+        layout.addLayout(filtros)
+
         self.status = QLabel("")
         self.status.setObjectName("Atenuado")
         layout.addWidget(self.status)
         self.progreso = crear_barra_progreso()
         layout.addWidget(self.progreso)
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["", "Producto", "Supermercado", "Precio", "€/ud ref.", "Marca"]
+            [
+                "",
+                "Producto",
+                "Supermercado",
+                "Precio",
+                "€/ud ref.",
+                "Marca",
+                "Oferta",
+                "Mejor precio",
+            ]
         )
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)
         self.table.setColumnWidth(0, 56)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        for col in (2, 3, 4, 5, 6, 7):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setCornerButtonEnabled(False)
         self.table.cellDoubleClicked.connect(self._open_row)
         layout.addWidget(self.table, 1)
+
+    def enfocar_busqueda(self) -> None:
+        self.query.setFocus()
+        self.query.selectAll()
 
     def actualizar(self) -> None:
         if not self.repositorio:
             return
-        from cestia.tiendas import alcampo_activo, carrefour_activo, mercadona_activo
-
         activas = []
         if mercadona_activo(self.repositorio):
             activas.append("Mercadona")
@@ -96,6 +187,16 @@ class PaginaBusqueda(QWidget):
             activas.append("Carrefour")
         if alcampo_activo(self.repositorio):
             activas.append("Alcampo")
+        if froiz_activo(self.repositorio):
+            activas.append("Froiz")
+        if eroski_activo(self.repositorio):
+            activas.append("Eroski")
+        if lidl_activo(self.repositorio):
+            activas.append("Lidl")
+        if dia_activo(self.repositorio):
+            activas.append("Dia")
+        if gadis_activo(self.repositorio):
+            activas.append("Gadis")
         if activas:
             self.subtitulo.setText("Busca en: " + " · ".join(activas))
         else:
@@ -116,13 +217,41 @@ class PaginaBusqueda(QWidget):
 
         def ok(results):
             mostrar_progreso(self.progreso, False)
-            self._on_results(results)
+            self._raw_results = results
+            self._aplicar_filtros()
 
         def error(e):
             mostrar_progreso(self.progreso, False)
             self.status.setText(f"Error: {e}")
 
         ejecutar_en_hilo(work, ok, error)
+
+    def _aplicar_filtros(self) -> None:
+        if not self._raw_results:
+            self._on_results([])
+            return
+        tienda = self.filtro_tienda.currentData()
+        tiendas = {tienda} if tienda else None
+        nutri = self.filtro_nutri.currentData()
+        nutriscore = {nutri} if nutri else None
+        pmin = self.filtro_precio_min.value()
+        pmax = self.filtro_precio_max.value()
+        historial_fn = None
+        if self.repositorio and self.check_rebajados.isChecked():
+            historial_fn = self.repositorio.historial_precios
+        filtrados = filtrar_resultados(
+            self._raw_results,
+            tiendas=tiendas,
+            precio_min=pmin if pmin > 0 else None,
+            precio_max=pmax if pmax < 999 else None,
+            nutriscore=nutriscore,
+            solo_rebajados=self.check_rebajados.isChecked(),
+            sin_gluten=self.check_sin_gluten.isChecked(),
+            historial_fn=historial_fn,
+        )
+        if self.check_agrupar.isChecked():
+            filtrados = agrupar_multi_tienda(filtrados)
+        self._on_results(filtrados)
 
     def _on_results(self, results: list[dict[str, Any]]) -> None:
         self._results = results
@@ -134,10 +263,13 @@ class PaginaBusqueda(QWidget):
             thumb = QLabel()
             cargar_miniatura(thumb, p.get("miniatura") or p.get("thumbnail"), 48)
             self.table.setCellWidget(i, 0, thumb)
-            self.table.setItem(
-                i, 1, QTableWidgetItem(p.get("nombre") or p.get("name") or "")
+            nombre = p.get("nombre") or p.get("name") or ""
+            if p.get("_grupo_tamano", 1) > 1:
+                nombre += f"  ({p['_grupo_tamano']} tiendas)"
+            self.table.setItem(i, 1, QTableWidgetItem(nombre))
+            item_tienda = QTableWidgetItem(
+                PaginaBusqueda._nombre_supermercado(p)
             )
-            item_tienda = QTableWidgetItem(self._nombre_supermercado(p))
             item_tienda.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, 2, item_tienda)
             self.table.setItem(
@@ -165,6 +297,27 @@ class PaginaBusqueda(QWidget):
             self.table.setItem(
                 i, 5, QTableWidgetItem(p.get("marca") or p.get("brand") or "")
             )
+            rebajado = es_rebajado(
+                p,
+                self.repositorio.historial_precios(p["id"])
+                if self.repositorio
+                else None,
+            )
+            oferta = QLabel("REBAJADO" if rebajado else "")
+            if rebajado:
+                oferta.setObjectName("BadgeOferta")
+            oferta.setAlignment(Qt.AlignCenter)
+            self.table.setCellWidget(i, 6, oferta)
+            mejor_txt = "—"
+            if p.get("_ahorro_max"):
+                mejor_txt = (
+                    f"{nombre_tienda(p.get('_mejor_tienda'))} "
+                    f"({formatear_euros(p.get('_mejor_precio'))}) "
+                    f"−{formatear_euros(p['_ahorro_max'])}"
+                )
+            elif p.get("_es_mejor") and p.get("_grupo_tamano", 1) > 1:
+                mejor_txt = "✓ Más barato"
+            self.table.setItem(i, 7, QTableWidgetItem(mejor_txt))
             self.table.setRowHeight(i, 56)
 
     def _open_row(self, row: int, _col: int) -> None:
@@ -173,23 +326,15 @@ class PaginaBusqueda(QWidget):
 
     @staticmethod
     def _nombre_supermercado(producto: dict[str, Any]) -> str:
-        tienda = (producto.get("tienda") or "").strip().lower()
-        id_producto = str(producto.get("id") or "")
-        if tienda == "alcampo" or id_producto.startswith("ac:"):
-            return "Alcampo"
-        if tienda == "carrefour" or id_producto.startswith("cf:"):
-            return "Carrefour"
-        if tienda == "mercadona" or id_producto.isdigit():
-            return "Mercadona"
-        if tienda:
-            return tienda.capitalize()
-        return "Mercadona"
+        return nombre_tienda(producto.get("tienda"), producto.get("id"))
 
 
 class PaginaProducto(QWidget):
     anadir_a_cesta = Signal(str)
     crear_alerta = Signal(str, float)
     abrir_producto = Signal(str)
+    comparar_producto = Signal(object)
+    anadir_lista = Signal(str)
 
     def __init__(self, catalogo, repositorio, parent=None) -> None:
         super().__init__(parent)
@@ -202,7 +347,8 @@ class PaginaProducto(QWidget):
         layout.setSpacing(0)
         self.setObjectName("PaginaProducto")
         self.setAutoFillBackground(True)
-        self._aplicar_paleta_clara(self)
+        self._tema = "claro"
+        self._widgets_paleta: list[QWidget] = [self]
 
         top = QHBoxLayout()
         top.setContentsMargins(16, 12, 16, 8)
@@ -221,18 +367,19 @@ class PaginaProducto(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._aplicar_paleta_clara(scroll)
+        self._widgets_paleta.append(scroll)
         layout.addWidget(scroll, 1)
 
         contenido = QWidget()
         contenido.setObjectName("FichaProducto")
         contenido.setAutoFillBackground(True)
-        self._aplicar_paleta_clara(contenido)
+        self._widgets_paleta.append(contenido)
         scroll.setWidget(contenido)
         viewport = scroll.viewport()
         if viewport is not None:
             viewport.setAutoFillBackground(True)
-            self._aplicar_paleta_clara(viewport)
+            self._widgets_paleta.append(viewport)
+        self._aplicar_paleta(self._tema)
         ficha = QVBoxLayout(contenido)
         ficha.setContentsMargins(16, 4, 16, 24)
         ficha.setSpacing(12)
@@ -254,22 +401,36 @@ class PaginaProducto(QWidget):
         self.meta.setWordWrap(True)
         self.price = QLabel("")
         self.price.setObjectName("Precio")
+        self.badge_oferta = QLabel("")
+        self.badge_oferta.setObjectName("BadgeOferta")
+        self.badge_oferta.hide()
         self.bulk = QLabel("")
         self.bulk.setObjectName("Atenuado")
         self.nutri = GraficoNutriScore()
-        self.nutri.hide()
         self.compare = QLabel("")
         self.compare.setWordWrap(True)
         info.addWidget(self.title)
         info.addWidget(self.meta)
         info.addWidget(self.price)
+        info.addWidget(self.badge_oferta)
         info.addWidget(self.bulk)
         info.addWidget(self.nutri)
+        self.grafico_precio = GraficoPrecio()
+        info.addWidget(self.grafico_precio)
         info.addWidget(self.compare)
 
         actions = QHBoxLayout()
         self.btn_cart = QPushButton("Añadir a la cesta")
         self.btn_cart.clicked.connect(self._cart)
+        self.btn_fav = QPushButton("☆ Favorito")
+        self.btn_fav.setProperty("secundario", True)
+        self.btn_fav.clicked.connect(self._toggle_fav)
+        self.btn_compare = QPushButton("Comparar")
+        self.btn_compare.setProperty("secundario", True)
+        self.btn_compare.clicked.connect(self._comparar)
+        self.btn_lista = QPushButton("Guardar en lista")
+        self.btn_lista.setProperty("secundario", True)
+        self.btn_lista.clicked.connect(self._lista)
         self.alert_price = QDoubleSpinBox()
         self.alert_price.setPrefix("Alertar < ")
         self.alert_price.setSuffix(" €")
@@ -279,6 +440,9 @@ class PaginaProducto(QWidget):
         self.btn_alert.setProperty("secundario", True)
         self.btn_alert.clicked.connect(self._alert)
         actions.addWidget(self.btn_cart)
+        actions.addWidget(self.btn_fav)
+        actions.addWidget(self.btn_compare)
+        actions.addWidget(self.btn_lista)
         actions.addWidget(self.alert_price)
         actions.addWidget(self.btn_alert)
         actions.addStretch()
@@ -290,38 +454,23 @@ class PaginaProducto(QWidget):
         info.addWidget(QLabel("Ingredientes"))
         info.addWidget(self.ingredientes)
 
-        panel_alergenos = QFrame()
-        panel_alergenos.setObjectName("PanelAlergenos")
-        panel_layout = QVBoxLayout(panel_alergenos)
-        panel_layout.setContentsMargins(14, 12, 14, 12)
-        panel_layout.setSpacing(6)
-        titulo_alergenos = QLabel("⚠ Alérgenos")
-        titulo_alergenos.setObjectName("TituloAlergenos")
-        self.alergenos = QLabel("")
-        self.alergenos.setObjectName("TextoAlergenos")
-        self.alergenos.setWordWrap(True)
-        self.alergenos.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        panel_layout.addWidget(titulo_alergenos)
-        panel_layout.addWidget(self.alergenos)
-        info.addWidget(panel_alergenos)
+        self.tarjeta_alergenos = TarjetaModerna(
+            tipo="peligro",
+            titulo="Alérgenos",
+        )
+        self.alergenos = self.tarjeta_alergenos.lbl_contenido
+        info.addWidget(self.tarjeta_alergenos)
 
-        panel_nutricion = QFrame()
-        panel_nutricion.setObjectName("PanelNutricion")
-        nut_layout = QVBoxLayout(panel_nutricion)
-        nut_layout.setContentsMargins(14, 12, 14, 12)
-        nut_layout.setSpacing(6)
-        titulo_nut = QLabel("Nutrición (por 100 g)")
-        titulo_nut.setObjectName("TituloNutricion")
-        pista_nut = QLabel("Valores de Open Food Facts cuando están disponibles")
-        pista_nut.setObjectName("PistaNutricion")
-        self.nutrition = QLabel("")
-        self.nutrition.setObjectName("TextoNutricion")
-        self.nutrition.setWordWrap(True)
-        self.nutrition.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        nut_layout.addWidget(titulo_nut)
-        nut_layout.addWidget(pista_nut)
-        nut_layout.addWidget(self.nutrition)
-        info.addWidget(panel_nutricion)
+        self.tarjeta_nutricion = TarjetaModerna(
+            tipo="info",
+            titulo="Nutrición (por 100 g)",
+            pista=(
+                "Valores de Open Food Facts cuando están disponibles. "
+                "A veces pueden referirse al producto ya preparado/reconstituido."
+            ),
+        )
+        self.nutrition = self.tarjeta_nutricion.lbl_contenido
+        info.addWidget(self.tarjeta_nutricion)
 
         panel_alts = QFrame()
         panel_alts.setObjectName("PanelAlternativas")
@@ -386,13 +535,25 @@ class PaginaProducto(QWidget):
         self.meta.setText(" · ".join(meta_bits))
         cargar_miniatura(self.image, product.get("miniatura") or product.get("thumbnail"), 220)
         self.price.setText(formatear_euros(product.get("precio_unidad") if product.get("precio_unidad") is not None else product.get("unit_price")))
+        if es_rebajado(product, history):
+            self.badge_oferta.setText("  REBAJADO  ")
+            self.badge_oferta.show()
+        else:
+            self.badge_oferta.hide()
+        self.grafico_precio.establecer_historial(history)
+        es_fav = self.repositorio.es_favorito(product["id"])
+        self.btn_fav.setText("★ Favorito" if es_fav else "☆ Favorito")
         if product.get("precio_bulto") if product.get("precio_bulto") is not None else product.get("bulk_price"):
             self.bulk.setText(
                 f"{formatear_euros(product.get('precio_bulto') or product.get('bulk_price'))}/{product.get('formato_tamano') or product.get('size_format') or 'ud'}"
             )
         else:
             self.bulk.setText("")
-        self.nutri.establecer_grado(product.get("nutriscore"))
+        nutriscore = product.get("nutriscore")
+        if nutriscore:
+            self.nutri.establecer_grado(nutriscore)
+        else:
+            self.nutri.establecer_no_disponible()
 
         if product.get("precio_unidad") if product.get("precio_unidad") is not None else product.get("unit_price") is not None:
             self.alert_price.setValue(max(0.01, float(product.get("precio_unidad") or product.get("unit_price")) * 0.9))
@@ -443,15 +604,15 @@ class PaginaProducto(QWidget):
                 self.alts.addItem(item)
 
     def _mostrar_alergenos(self, texto: str | None) -> None:
-        limpio = (texto or "").strip()
+        from cestia.enriquecimiento import deduplicar_alergenos
+
+        limpio = deduplicar_alergenos(texto)
         if not limpio or limpio.lower() in {"sin datos", "sin datos de alérgenos"}:
-            self.alergenos.setText("Sin datos de alérgenos")
-            self.alergenos.setProperty("vacio", "true")
+            self.tarjeta_alergenos.establecer_contenido(
+                "Sin datos de alérgenos", vacio=True
+            )
         else:
-            self.alergenos.setText(limpio)
-            self.alergenos.setProperty("vacio", "false")
-        self.alergenos.style().unpolish(self.alergenos)
-        self.alergenos.style().polish(self.alergenos)
+            self.tarjeta_alergenos.establecer_contenido(limpio, vacio=False)
 
     def _mostrar_nutricion(self, product: dict[str, Any]) -> None:
         mapping = [
@@ -471,38 +632,70 @@ class PaginaProducto(QWidget):
                     f"<td class='v'><b>{product[key]:.1f}</b> {unidad}</td></tr>"
                 )
         if filas:
-            self.nutrition.setText(
+            self.tarjeta_nutricion.establecer_contenido(
                 "<table cellspacing='0' cellpadding='4'>"
                 + "".join(filas)
-                + "</table>"
+                + "</table>",
+                vacio=False,
             )
-            self.nutrition.setProperty("vacio", "false")
         else:
-            self.nutrition.setText("Sin tabla nutricional (aún)")
-            self.nutrition.setProperty("vacio", "true")
-        self.nutrition.style().unpolish(self.nutrition)
-        self.nutrition.style().polish(self.nutrition)
+            self.tarjeta_nutricion.establecer_contenido(
+                "Sin tabla nutricional (aún)", vacio=True
+            )
 
     def _abrir_alternativa(self, item: QListWidgetItem) -> None:
         id_producto = item.data(Qt.UserRole)
         if id_producto:
             self.abrir_producto.emit(str(id_producto))
 
-    @staticmethod
-    def _aplicar_paleta_clara(widget: QWidget) -> None:
-        fondo = QColor("#eef6f1")
-        texto = QColor("#14201a")
-        paleta = widget.palette()
-        paleta.setColor(QPalette.Window, fondo)
-        paleta.setColor(QPalette.Base, QColor("#ffffff"))
-        paleta.setColor(QPalette.Text, texto)
-        paleta.setColor(QPalette.WindowText, texto)
-        paleta.setColor(QPalette.ButtonText, texto)
-        widget.setPalette(paleta)
+    def aplicar_tema(self, tema: str) -> None:
+        clave = "oscuro" if (tema or "").strip().lower() in {
+            "oscuro", "dark", "darko"
+        } else "claro"
+        self._tema = clave
+        self._aplicar_paleta(clave)
+        self.nutri.aplicar_tema(clave)
+
+    def _aplicar_paleta(self, tema: str) -> None:
+        if tema == "oscuro":
+            fondo = QColor("#1a2820")
+            base = QColor("#24352c")
+            texto = QColor("#e8f0ec")
+        else:
+            fondo = QColor("#eef6f1")
+            base = QColor("#ffffff")
+            texto = QColor("#14201a")
+        for widget in self._widgets_paleta:
+            paleta = widget.palette()
+            paleta.setColor(QPalette.Window, fondo)
+            paleta.setColor(QPalette.Base, base)
+            paleta.setColor(QPalette.Text, texto)
+            paleta.setColor(QPalette.WindowText, texto)
+            paleta.setColor(QPalette.ButtonText, texto)
+            widget.setPalette(paleta)
 
     def _cart(self) -> None:
         if self.product:
             self.anadir_a_cesta.emit(self.product["id"])
+
+    def _toggle_fav(self) -> None:
+        if not self.product:
+            return
+        pid = self.product["id"]
+        if self.repositorio.es_favorito(pid):
+            self.repositorio.favorito_quitar(pid)
+            self.btn_fav.setText("☆ Favorito")
+        else:
+            self.repositorio.favorito_anadir(pid)
+            self.btn_fav.setText("★ Favorito")
+
+    def _comparar(self) -> None:
+        if self.product:
+            self.comparar_producto.emit(self.product)
+
+    def _lista(self) -> None:
+        if self.product:
+            self.anadir_lista.emit(self.product["id"])
 
     def _alert(self) -> None:
         if self.product:
@@ -510,11 +703,16 @@ class PaginaProducto(QWidget):
 
 
 class PaginaCesta(QWidget):
-    def __init__(self, repositorio, parent=None) -> None:
+    def __init__(self, repositorio, catalogo=None, parent=None) -> None:
         super().__init__(parent)
         self.repositorio = repositorio
+        self.catalogo = catalogo
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Cesta de la compra", objectName="TituloPagina"))
+
+        self.presupuesto = QLabel("")
+        self.presupuesto.setWordWrap(True)
+        layout.addWidget(self.presupuesto)
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Producto", "Cant.", "Precio", "Subtotal", ""])
@@ -525,9 +723,17 @@ class PaginaCesta(QWidget):
         self.totals.setWordWrap(True)
         layout.addWidget(self.totals)
 
+        self.optima = QLabel("")
+        self.optima.setWordWrap(True)
+        self.optima.setObjectName("Atenuado")
+        layout.addWidget(self.optima)
+
         row = QHBoxLayout()
         save = QPushButton("Guardar compra")
         save.clicked.connect(self.guardar_compra)
+        calc = QPushButton("Calcular óptima")
+        calc.setProperty("secundario", True)
+        calc.clicked.connect(self._calcular_optima)
         clear = QPushButton("Vaciar")
         clear.setProperty("secundario", True)
         clear.clicked.connect(self.vaciar)
@@ -535,6 +741,7 @@ class PaginaCesta(QWidget):
         refresh.setProperty("secundario", True)
         refresh.clicked.connect(self.actualizar)
         row.addWidget(save)
+        row.addWidget(calc)
         row.addWidget(clear)
         row.addWidget(refresh)
         row.addStretch()
@@ -569,9 +776,69 @@ class PaginaCesta(QWidget):
             f"<b>Total: {formatear_euros(t['coste'])}</b><br>"
             f"Calorías: {t['energia_kcal']:.0f} kcal · "
             f"Prot. {t['proteinas']:.1f} g · Hidr. {t['hidratos']:.1f} g · "
-            f"Grasas {t['grasas']:.1f} g · Fibra {t['fibra']:.1f} g · "
+            f"Grasas: {t['grasas']:.1f} g · Fibra {t['fibra']:.1f} g · "
             f"Azúcar {t['azucares']:.1f} g · Sal {t['sal']:.2f} g"
         )
+        self._mostrar_presupuesto(t["coste"])
+
+    def _mostrar_presupuesto(self, total_cesta: float) -> None:
+        res = self.repositorio.resumen_presupuesto()
+        partes = []
+        if res.get("presupuesto_semanal") is not None:
+            rest = res.get("restante_semana")
+            if rest is not None:
+                rest -= total_cesta
+            partes.append(
+                f"Presupuesto semanal: {formatear_euros(res['presupuesto_semanal'])} · "
+                f"gastado {formatear_euros(res['gasto_semana'])} · "
+                f"restante ~{formatear_euros(rest if rest is not None else 0)}"
+            )
+        if res.get("presupuesto_mensual") is not None:
+            rest_m = res.get("restante_mes")
+            if rest_m is not None:
+                rest_m -= total_cesta
+            partes.append(
+                f"Presupuesto mensual: {formatear_euros(res['presupuesto_mensual'])} · "
+                f"gastado {formatear_euros(res['gasto_mes'])} · "
+                f"restante ~{formatear_euros(rest_m if rest_m is not None else 0)}"
+            )
+        self.presupuesto.setText(" · ".join(partes) if partes else "")
+
+    def _calcular_optima(self) -> None:
+        items = self.repositorio.items_cesta()
+        if not items:
+            self.optima.setText("La cesta está vacía.")
+            return
+        alternativas: dict[str, list] = {}
+        if self.catalogo:
+            for item in items:
+                try:
+                    alts = self.catalogo.alternativas_mas_baratas(item, limite=8)
+                    alternativas[item["id"]] = alts
+                except Exception:  # noqa: BLE001
+                    pass
+        por_tienda = calcular_cesta_por_tienda(items, alternativas)
+        mezclada = calcular_cesta_optima_mezclada(items, alternativas)
+        lineas = ["<b>Cesta óptima multi-tienda</b>"]
+        if por_tienda.get("mejor_tienda"):
+            m = por_tienda["mejor_tienda"]
+            lineas.append(
+                f"Una sola tienda: {nombre_tienda(m['tienda'])} → "
+                f"{formatear_euros(m['total'])} "
+                f"({m['productos_cubiertos']}/{m['productos_total']} productos)"
+            )
+        lineas.append(
+            f"Mezclando tiendas: {formatear_euros(mezclada['total'])}"
+        )
+        for tienda, sub in sorted(
+            mezclada.get("tiendas_usadas", {}).items(), key=lambda x: -x[1]
+        ):
+            lineas.append(f"  · {nombre_tienda(tienda)}: {formatear_euros(sub)}")
+        if por_tienda.get("ahorro_vs_peor"):
+            lineas.append(
+                f"Ahorro vs tienda más cara: {formatear_euros(por_tienda['ahorro_vs_peor'])}"
+            )
+        self.optima.setText("<br>".join(lineas))
 
     def guardar_compra(self) -> None:
         pid = self.repositorio.guardar_compra()
@@ -604,10 +871,27 @@ class PaginaHistorial(QWidget):
         split.addWidget(self.detail)
         split.setStretchFactor(1, 2)
         layout.addWidget(split, 1)
+        btns = QHBoxLayout()
+        dup = QPushButton("Duplicar en cesta")
+        dup.clicked.connect(self._duplicar)
         btn = QPushButton("Actualizar")
         btn.setProperty("secundario", True)
         btn.clicked.connect(self.actualizar)
-        layout.addWidget(btn, alignment=Qt.AlignLeft)
+        btns.addWidget(dup)
+        btns.addWidget(btn)
+        btns.addStretch()
+        layout.addLayout(btns)
+
+    def _duplicar(self) -> None:
+        row = self.list.currentRow()
+        if row < 0 or row >= len(getattr(self, "_purchases", [])):
+            QMessageBox.information(self, "Historial", "Selecciona una compra.")
+            return
+        pid = self._purchases[row]["id"]
+        n = self.repositorio.duplicar_compra_en_cesta(pid)
+        QMessageBox.information(
+            self, "Cesta", f"{n} productos de la compra #{pid} añadidos a la cesta."
+        )
 
     def actualizar(self) -> None:
         self.insight.setText(self.repositorio.insight_gastos())
@@ -793,10 +1077,19 @@ class PaginaAlertas(QWidget):
         alerts = self.repositorio.listar_alertas()
         self.table.setRowCount(len(alerts))
         for i, a in enumerate(alerts):
-            self.table.setItem(i, 0, QTableWidgetItem(a["product_name"]))
-            self.table.setItem(i, 1, QTableWidgetItem(formatear_euros(a["target_price"])))
+            nombre = a.get("nombre_producto") or a.get("product_name") or ""
+            objetivo = a.get("precio_objetivo") or a.get("target_price")
+            activa = a.get("activa", a.get("active", 1))
+            self.table.setItem(i, 0, QTableWidgetItem(nombre))
+            self.table.setItem(i, 1, QTableWidgetItem(formatear_euros(objetivo)))
             self.table.setItem(
-                i, 2, QTableWidgetItem("Activa" if a["active"] else f"Disparada {a.get('disparada_en') or a.get('triggered_at') or ''}")
+                i,
+                2,
+                QTableWidgetItem(
+                    "Activa"
+                    if activa
+                    else f"Disparada {a.get('disparada_en') or a.get('triggered_at') or ''}"
+                ),
             )
             rm = QPushButton("Eliminar")
             rm.setProperty("secundario", True)
@@ -845,7 +1138,7 @@ class PaginaEstadisticas(QWidget):
             from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
             from matplotlib.figure import Figure
 
-            self.figure = Figure(figsize=(8, 6), tight_layout=True)
+            self.figure = Figure(figsize=(8, 6), dpi=100)
             self.canvas = FigureCanvasQTAgg(self.figure)
             layout.addWidget(self.canvas, 1)
             self._has_mpl = True
@@ -918,6 +1211,10 @@ class PaginaEstadisticas(QWidget):
             ax3.set_title("Gasto por categoría")
         else:
             ax3.set_title("Gasto por categoría (sin datos)")
+
+        self.figure.subplots_adjust(
+            left=0.08, right=0.98, top=0.94, bottom=0.08, hspace=0.45, wspace=0.35
+        )
 
         # inflación simple de cesta: media de cambios de precio de productos con historial
         changes = []
@@ -1155,7 +1452,9 @@ class PaginaEscaner(QWidget):
 
 
 class PaginaConfiguracion(QWidget):
-    """Ajustes locales: clave Gemini, modelo y almacén."""
+    """Ajustes locales: clave Gemini, modelo, tiendas, presupuesto y tema."""
+
+    tema_cambiado = Signal(str)
 
     def __init__(self, asistente, repositorio, parent=None) -> None:
         super().__init__(parent)
@@ -1213,12 +1512,53 @@ class PaginaConfiguracion(QWidget):
         self.check_mercadona = QCheckBox("Mercadona")
         self.check_carrefour = QCheckBox("Carrefour")
         self.check_alcampo = QCheckBox("Alcampo")
+        self.check_froiz = QCheckBox("Froiz")
+        self.check_eroski = QCheckBox("Eroski")
+        self.check_lidl = QCheckBox("Lidl")
+        self.check_dia = QCheckBox("Dia")
+        self.check_gadis = QCheckBox("Gadis")
         tiendas_row = QHBoxLayout()
         tiendas_row.addWidget(self.check_mercadona)
         tiendas_row.addWidget(self.check_carrefour)
         tiendas_row.addWidget(self.check_alcampo)
+        tiendas_row.addWidget(self.check_froiz)
+        tiendas_row.addWidget(self.check_eroski)
+        tiendas_row.addWidget(self.check_lidl)
+        tiendas_row.addWidget(self.check_dia)
+        tiendas_row.addWidget(self.check_gadis)
         tiendas_row.addStretch()
         layout.addLayout(tiendas_row)
+
+        layout.addWidget(QLabel("Presupuesto de compra"))
+        pres_row = QHBoxLayout()
+        self.presupuesto_sem = QDoubleSpinBox()
+        self.presupuesto_sem.setPrefix("Semanal ")
+        self.presupuesto_sem.setSuffix(" €")
+        self.presupuesto_sem.setMaximum(99999)
+        self.presupuesto_sem.setSpecialValueText("Sin límite")
+        self.presupuesto_mes = QDoubleSpinBox()
+        self.presupuesto_mes.setPrefix("Mensual ")
+        self.presupuesto_mes.setSuffix(" €")
+        self.presupuesto_mes.setMaximum(999999)
+        self.presupuesto_mes.setSpecialValueText("Sin límite")
+        pres_row.addWidget(self.presupuesto_sem)
+        pres_row.addWidget(self.presupuesto_mes)
+        pres_row.addStretch()
+        layout.addLayout(pres_row)
+
+        layout.addWidget(QLabel("Apariencia"))
+        self.combo_tema = QComboBox()
+        self.combo_tema.addItem("Tema claro", "claro")
+        self.combo_tema.addItem("Tema oscuro", "oscuro")
+        layout.addWidget(self.combo_tema)
+
+        layout.addWidget(
+            QLabel(
+                "Atajos: Ctrl+F buscar · Ctrl+1…9 navegar · Esc volver · "
+                "Ctrl+Enter añadir a cesta",
+                objectName="Atenuado",
+            )
+        )
 
         botones = QHBoxLayout()
         guardar = QPushButton("Guardar")
@@ -1251,7 +1591,17 @@ class PaginaConfiguracion(QWidget):
         layout.addWidget(ayuda)
 
     def actualizar(self) -> None:
-        from cestia.tiendas import alcampo_activo, carrefour_activo, mercadona_activo
+        from cestia.tiendas import (
+            CLAVE_TEMA,
+            alcampo_activo,
+            carrefour_activo,
+            dia_activo,
+            eroski_activo,
+            froiz_activo,
+            gadis_activo,
+            lidl_activo,
+            mercadona_activo,
+        )
 
         clave = self.asistente.obtener_clave()
         self.campo_clave.setText(clave)
@@ -1264,6 +1614,19 @@ class PaginaConfiguracion(QWidget):
         self.check_mercadona.setChecked(mercadona_activo(self.repositorio))
         self.check_carrefour.setChecked(carrefour_activo(self.repositorio))
         self.check_alcampo.setChecked(alcampo_activo(self.repositorio))
+        self.check_froiz.setChecked(froiz_activo(self.repositorio))
+        self.check_eroski.setChecked(eroski_activo(self.repositorio))
+        self.check_lidl.setChecked(lidl_activo(self.repositorio))
+        self.check_dia.setChecked(dia_activo(self.repositorio))
+        self.check_gadis.setChecked(gadis_activo(self.repositorio))
+        ps = self.repositorio.obtener_presupuesto_semanal()
+        pm = self.repositorio.obtener_presupuesto_mensual()
+        self.presupuesto_sem.setValue(ps if ps is not None else 0)
+        self.presupuesto_mes.setValue(pm if pm is not None else 0)
+        tema = self.repositorio.obtener_ajuste(CLAVE_TEMA, "claro")
+        tidx = self.combo_tema.findData(tema)
+        if tidx >= 0:
+            self.combo_tema.setCurrentIndex(tidx)
         if clave:
             self.estado.setText("Hay una clave configurada.")
         else:
@@ -1276,22 +1639,27 @@ class PaginaConfiguracion(QWidget):
         )
 
     def guardar(self) -> None:
-        from cestia.tiendas import guardar_tiendas
+        from cestia.tiendas import CLAVE_TEMA, guardar_tiendas
 
         clave = self.campo_clave.text().strip()
         modelo = self.campo_modelo.currentText().strip() or "gemini-2.0-flash"
         self.asistente.guardar_clave(clave)
         self.asistente.guardar_modelo(modelo)
-        if (
-            not self.check_mercadona.isChecked()
-            and not self.check_carrefour.isChecked()
-            and not self.check_alcampo.isChecked()
-        ):
+        activas = [
+            self.check_mercadona.isChecked(),
+            self.check_carrefour.isChecked(),
+            self.check_alcampo.isChecked(),
+            self.check_froiz.isChecked(),
+            self.check_eroski.isChecked(),
+            self.check_lidl.isChecked(),
+            self.check_dia.isChecked(),
+            self.check_gadis.isChecked(),
+        ]
+        if not any(activas):
             QMessageBox.warning(
                 self,
                 "Configuración",
-                "Debes dejar al menos una tienda activa "
-                "(Mercadona, Carrefour o Alcampo).",
+                "Debes dejar al menos una tienda activa.",
             )
             return
         guardar_tiendas(
@@ -1299,20 +1667,41 @@ class PaginaConfiguracion(QWidget):
             mercadona=self.check_mercadona.isChecked(),
             carrefour=self.check_carrefour.isChecked(),
             alcampo=self.check_alcampo.isChecked(),
+            froiz=self.check_froiz.isChecked(),
+            eroski=self.check_eroski.isChecked(),
+            lidl=self.check_lidl.isChecked(),
+            dia=self.check_dia.isChecked(),
+            gadis=self.check_gadis.isChecked(),
         )
+        ps = self.presupuesto_sem.value()
+        pm = self.presupuesto_mes.value()
+        self.repositorio.guardar_presupuestos(
+            semanal=ps,
+            mensual=pm,
+        )
+        tema = self.combo_tema.currentData() or "claro"
+        self.repositorio.guardar_ajuste(CLAVE_TEMA, tema)
+        self.tema_cambiado.emit(str(tema))
         partes = []
         if clave:
             partes.append("Clave Gemini guardada.")
         else:
             partes.append("Clave Gemini vacía.")
         tiendas = []
-        if self.check_mercadona.isChecked():
-            tiendas.append("Mercadona")
-        if self.check_carrefour.isChecked():
-            tiendas.append("Carrefour")
-        if self.check_alcampo.isChecked():
-            tiendas.append("Alcampo")
+        for chk, nom in [
+            (self.check_mercadona, "Mercadona"),
+            (self.check_carrefour, "Carrefour"),
+            (self.check_alcampo, "Alcampo"),
+            (self.check_froiz, "Froiz"),
+            (self.check_eroski, "Eroski"),
+            (self.check_lidl, "Lidl"),
+            (self.check_dia, "Dia"),
+            (self.check_gadis, "Gadis"),
+        ]:
+            if chk.isChecked():
+                tiendas.append(nom)
         partes.append("Tiendas: " + ", ".join(tiendas))
+        partes.append(f"Tema: {tema}.")
         mensaje = " ".join(partes)
         QMessageBox.information(self, "Configuración", mensaje)
         self.estado.setText(mensaje)
@@ -1353,24 +1742,38 @@ class PaginaAbout(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        layout = QVBoxLayout(self)
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(0, 0, 0, 0)
+        raiz.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        raiz.addWidget(scroll)
+
+        contenido = QWidget()
+        scroll.setWidget(contenido)
+        layout = QVBoxLayout(contenido)
         layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
 
-        layout.addWidget(QLabel("About", objectName="TituloPagina"), alignment=Qt.AlignHCenter)
+        layout.addWidget(
+            QLabel("About", objectName="TituloPagina"), alignment=Qt.AlignHCenter
+        )
 
         self.logo = QLabel()
         self.logo.setObjectName("LogoAbout")
         self.logo.setAlignment(Qt.AlignCenter)
-        self.logo.setMinimumHeight(180)
+        self.logo.setMinimumHeight(160)
         if self.RUTA_LOGO.exists():
             pixmap = QPixmap(str(self.RUTA_LOGO))
             if not pixmap.isNull():
                 self.logo.setPixmap(
                     pixmap.scaled(
                         420,
-                        220,
+                        200,
                         Qt.KeepAspectRatio,
                         Qt.SmoothTransformation,
                     )
@@ -1381,45 +1784,69 @@ class PaginaAbout(QWidget):
             self.logo.setText("CestIA")
         layout.addWidget(self.logo, alignment=Qt.AlignHCenter)
 
-        descripcion = QLabel(
-            "CestIA analiza el precio de tu compra en Mercadona, Carrefour y Alcampo "
-            "desde tu equipo. Los datos se guardan en local; las tiendas usan "
-            "APIs no oficiales pensadas para uso personal."
+        descripcion = self._bloque_texto(
+            "CestIA analiza el precio de tu compra en varios supermercados "
+            "(Mercadona, Carrefour, Alcampo, Froiz, Eroski, Lidl, Dia y Gadis) "
+            "desde tu equipo. Los datos se guardan en local. "
+            "No está afiliada a ninguna cadena: consulta fuentes de acceso "
+            "público pensadas para uso personal.",
+            centrado=True,
         )
-        descripcion.setObjectName("Atenuado")
-        descripcion.setWordWrap(True)
-        descripcion.setAlignment(Qt.AlignHCenter)
-        descripcion.setMaximumWidth(560)
         layout.addWidget(descripcion, alignment=Qt.AlignHCenter)
 
-        funciones_titulo = QLabel("Funcionalidades")
-        funciones_titulo.setObjectName("TituloPagina")
-        funciones_titulo.setStyleSheet("font-size: 18px;")
-        funciones_titulo.setAlignment(Qt.AlignHCenter)
-        layout.addWidget(funciones_titulo)
-
-        funciones = QLabel(
-            "• Búsqueda multi-tienda (Mercadona, Carrefour y Alcampo), activables en Configuración\n"
-            "• Ficha de producto: precio, foto, ingredientes, alérgenos, Nutri-Score y macros\n"
-            "• Historial de precios y alternativas más baratas\n"
-            "• Cesta con coste total y resumen nutricional\n"
-            "• Historial de compras e insights de gasto\n"
-            "• Comparador de precios (evolución ~6 meses)\n"
-            "• Alertas cuando un producto baja de un precio\n"
-            "• Estadísticas: gasto semanal/mensual/anual/categoría e inflación de cesta\n"
-            "• IA con Google Gemini (menús, presupuestos, listas)\n"
-            "• Escáner de códigos de barras (webcam o EAN)\n"
-            "• Configuración: clave Gemini, modelo y tiendas activas"
+        layout.addWidget(
+            self._titulo_seccion("Funcionalidades"), alignment=Qt.AlignHCenter
         )
-        funciones.setObjectName("Atenuado")
-        funciones.setWordWrap(True)
-        funciones.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        funciones.setMaximumWidth(560)
+        funciones = self._bloque_texto(
+            "• Búsqueda multi-tienda (Mercadona, Carrefour, Alcampo, Froiz, "
+            "Eroski, Lidl, Dia y Gadis), activables en Configuración\n"
+            "• Comparación entre tiendas, filtros (precio, Nutri-Score, "
+            "rebajados, sin gluten) y badge de oferta\n"
+            "• Ficha de producto: foto, precio, ingredientes, alérgenos, "
+            "Nutri-Score, nutrición, gráfico de evolución y alternativas\n"
+            "• Favoritos y listas de la compra reutilizables\n"
+            "• Comparador de evolución (~6 meses) y comparador de 2 productos\n"
+            "• Cesta con totales nutricionales, presupuesto semanal/mensual "
+            "y cálculo de cesta óptima multi-tienda\n"
+            "• Historial de compras con opción de duplicar en la cesta\n"
+            "• Alertas de precio y estadísticas de gasto "
+            "(semanal, mensual, anual y por categoría)\n"
+            "• IA opcional con Google Gemini (menús, presupuestos, listas)\n"
+            "• Escáner de códigos de barras (webcam o EAN a mano)\n"
+            "• Tema claro/oscuro, atajos de teclado y ajustes locales"
+        )
         layout.addWidget(funciones, alignment=Qt.AlignHCenter)
+
+        layout.addWidget(
+            self._titulo_seccion("Limitaciones"), alignment=Qt.AlignHCenter
+        )
+        limitaciones = self._bloque_texto(
+            "• No es una app oficial ni está afiliada a las tiendas; "
+            "no vende, no hace pedidos ni sustituye sus webs o apps.\n"
+            "• Los precios y el catálogo dependen de servicios públicos "
+            "de cada cadena: pueden cambiar, fallar o desaparecer "
+            "sin aviso.\n"
+            "• La cobertura y la calidad de datos no es igual en todas "
+            "las tiendas (fotos, marca, stock, zona geográfica).\n"
+            "• Nutri-Score, alérgenos y nutrición pueden faltar o proceder "
+            "de Open Food Facts (datos colaborativos, no oficiales).\n"
+            "• El historial, el comparador y las estadísticas solo reflejan "
+            "lo que hayas buscado y guardado en este equipo.\n"
+            "• La «cesta óptima» y las marcas inferidas son orientativas; "
+            "no garantizan el precio en caja ni la equivalencia exacta "
+            "entre productos.\n"
+            "• La IA (Gemini) puede equivocarse; no sustituye el etiquetado "
+            "del envase ni un ticket oficial.\n"
+            "• Uso previsto: personal y local. Tú eres responsable de "
+            "cumplir las condiciones de cada servicio de terceros.\n"
+            "• El programa se ofrece «tal cual», sin garantía de exactitud "
+            "de precios, disponibilidad ni continuidad del servicio."
+        )
+        layout.addWidget(limitaciones, alignment=Qt.AlignHCenter)
 
         from cestia import __version__
 
-        version = QLabel(f"Versión {__version__}")
+        version = QLabel(f"Versión {__version__} · GPL-3.0")
         version.setObjectName("Atenuado")
         version.setAlignment(Qt.AlignHCenter)
         layout.addWidget(version)
@@ -1431,6 +1858,36 @@ class PaginaAbout(QWidget):
         layout.addWidget(github, alignment=Qt.AlignHCenter)
 
         layout.addStretch(1)
+
+    @staticmethod
+    def _titulo_seccion(texto: str) -> QLabel:
+        titulo = QLabel(texto)
+        titulo.setObjectName("TituloPagina")
+        titulo.setStyleSheet("font-size: 18px;")
+        titulo.setAlignment(Qt.AlignHCenter)
+        return titulo
+
+    @staticmethod
+    def _bloque_texto(texto: str, *, centrado: bool = False, ancho: int = 580) -> QLabel:
+        """QLabel multilínea con altura correcta (evita cortar la última línea)."""
+        from PySide6.QtGui import QTextDocument
+
+        cuerpo = texto.rstrip() + "\n"
+        etiqueta = QLabel(cuerpo)
+        etiqueta.setObjectName("Atenuado")
+        etiqueta.setWordWrap(True)
+        etiqueta.setAlignment(
+            Qt.AlignHCenter | Qt.AlignTop if centrado else Qt.AlignLeft | Qt.AlignTop
+        )
+        etiqueta.setFixedWidth(ancho)
+        etiqueta.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
+
+        documento = QTextDocument()
+        documento.setDefaultFont(etiqueta.font())
+        documento.setPlainText(cuerpo)
+        documento.setTextWidth(ancho)
+        etiqueta.setMinimumHeight(int(documento.size().height()) + 16)
+        return etiqueta
 
     def _abrir_github(self) -> None:
         from PySide6.QtCore import QUrl

@@ -25,7 +25,8 @@ class Configuracion(BaseSettings):
     ttl_cache_busqueda: int = 900
 
     limite_peticiones_por_minuto: int = 30
-    timeout_http: float = 20.0
+    # Tope por petición HTTP (evita hilos colgados en búsquedas paralelas).
+    timeout_http: float = 8.0
     agente_usuario: str = (
         "Mozilla/5.0 (compatible; CestIA/0.2; +uso-personal)"
     )

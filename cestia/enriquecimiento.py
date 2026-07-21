@@ -24,6 +24,32 @@ def quitar_html(html: str | None) -> str:
     return re.sub(r"[ \t]+", " ", texto).strip()
 
 
+def deduplicar_alergenos(texto: str | None) -> str:
+    """Reduce frases repetidas («Contiene…», «Puede contener…») a una sola vez."""
+    if not texto:
+        return ""
+    limpio = re.sub(r"\s+", " ", str(texto)).strip()
+    if not limpio:
+        return ""
+    frases: list[str] = []
+    vistos: set[str] = set()
+    for trozo in limpio.split(". "):
+        frase = trozo.strip(" .")
+        if not frase:
+            continue
+        clave = frase.casefold()
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        frases.append(frase)
+    if not frases:
+        return ""
+    unido = ". ".join(frases)
+    if limpio.endswith(".") and not unido.endswith("."):
+        unido += "."
+    return unido
+
+
 def parsear_nutricion_mercadona(bruto: dict[str, Any]) -> dict[str, Any]:
     info = bruto.get("nutrition_information") or {}
     return {

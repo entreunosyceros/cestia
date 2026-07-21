@@ -169,6 +169,9 @@ def normalizar_producto_alcampo(item: dict[str, Any]) -> dict[str, Any]:
     marca = item.get("brand")
     if isinstance(marca, dict):
         marca = marca.get("name") or marca.get("value")
+    from cestia.normalizacion import inferir_marca
+
+    marca = inferir_marca(nombre, marca)
     return {
         "id": f"{PREFIJO_ID}{rid}",
         "id_externo": rid,

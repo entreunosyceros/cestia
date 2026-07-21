@@ -189,9 +189,22 @@ QTableWidget, QListWidget {
 }
 QHeaderView::section {
     background: #e6f4ec;
+    color: #0a3d2a;
     padding: 8px;
     border: none;
     font-weight: 700;
+}
+QTableCornerButton::section {
+    background: #e6f4ec;
+    border: none;
+}
+QTableWidget::item {
+    color: #14201a;
+    background: #ffffff;
+}
+QTableWidget::item:selected {
+    background: #d6e9f8;
+    color: #063a6d;
 }
 QLabel#TituloPagina {
     font-size: 24px;
@@ -206,59 +219,79 @@ QLabel#Precio {
 }
 QLabel#BadgeSube { color: #b42318; font-weight: 700; }
 QLabel#BadgeBaja { color: #0f6b45; font-weight: 700; }
+QLabel#BadgeOferta {
+    color: #ffffff;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: #dc2626;
+}
 QLabel#Nutri {
     font-weight: 800;
     padding: 4px 10px;
     border-radius: 8px;
     background: #e6f4ec;
 }
-QFrame#PanelAlergenos {
-    background: #fff8eb;
-    border: 2px solid #e6a23c;
+/* Tarjetas modernas (alérgenos / nutrición) */
+QFrame#TarjetaBase {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E7EB;
     border-radius: 12px;
 }
-QFrame#PanelAlergenos QLabel#TituloAlergenos {
-    font-size: 15px;
-    font-weight: 800;
-    color: #8a5a00;
-    background: transparent;
-}
-QFrame#PanelAlergenos QLabel#TextoAlergenos {
+QFrame#TarjetaBase QWidget#TarjetaCuerpo { background: transparent; }
+QLabel#TarjetaTitulo {
     font-size: 14px;
-    font-weight: 700;
-    color: #5c3d00;
-    background: transparent;
-}
-QFrame#PanelAlergenos QLabel#TextoAlergenos[vacio="true"] {
-    font-weight: 500;
-    color: #8a7350;
-}
-QFrame#PanelNutricion {
-    background: #e8f6ef;
-    border: 2px solid #0f6b45;
-    border-radius: 12px;
-}
-QFrame#PanelNutricion QLabel#TituloNutricion {
-    font-size: 15px;
     font-weight: 800;
-    color: #0a3d2a;
+    color: #1F2937;
     background: transparent;
 }
-QFrame#PanelNutricion QLabel#PistaNutricion {
+QLabel#TarjetaPista {
     font-size: 12px;
-    color: #3d6b54;
+    color: #6B7280;
     background: transparent;
 }
-QFrame#PanelNutricion QLabel#TextoNutricion {
-    font-size: 14px;
-    color: #14201a;
-    background: #ffffff;
-    border-radius: 8px;
-    padding: 8px 10px;
+QLabel#TarjetaContenido {
+    font-size: 13px;
+    color: #4B5563;
+    background: transparent;
 }
-QFrame#PanelNutricion QLabel#TextoNutricion[vacio="true"] {
-    color: #5a6b62;
+QLabel#TarjetaContenido[vacio="true"] {
     font-weight: 500;
+    color: #9CA3AF;
+}
+QFrame#IndicadorLateral {
+    background-color: #9CA3AF;
+    border-radius: 2px;
+}
+QFrame#TarjetaBase[class="peligro"] {
+    background-color: #FFFBEB;
+    border: 1px solid #FDE68A;
+}
+QFrame#TarjetaBase[class="peligro"] QFrame#IndicadorLateral {
+    background-color: #D97706;
+}
+QFrame#TarjetaBase[class="peligro"] QLabel#TarjetaTitulo {
+    color: #B45309;
+}
+QFrame#TarjetaBase[class="peligro"] QLabel#TarjetaContenido {
+    color: #78350F;
+    font-weight: 600;
+}
+QFrame#TarjetaBase[class="info"] {
+    background-color: #F0FDF4;
+    border: 1px solid #BBF7D0;
+}
+QFrame#TarjetaBase[class="info"] QFrame#IndicadorLateral {
+    background-color: #16A34A;
+}
+QFrame#TarjetaBase[class="info"] QLabel#TarjetaTitulo {
+    color: #14532D;
+}
+QFrame#TarjetaBase[class="info"] QLabel#TarjetaPista {
+    color: #3d6b54;
+}
+QFrame#TarjetaBase[class="info"] QLabel#TarjetaContenido {
+    color: #14201a;
 }
 QFrame#PanelAlternativas {
     background: #eaf3fb;

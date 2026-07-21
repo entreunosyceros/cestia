@@ -94,6 +94,26 @@ CREATE TABLE IF NOT EXISTS ajustes (
     clave TEXT PRIMARY KEY,
     valor TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS favoritos (
+    id_producto TEXT PRIMARY KEY REFERENCES productos(id) ON DELETE CASCADE,
+    anadido_en TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS listas_compra (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    creada_en TEXT NOT NULL,
+    actualizada_en TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS listas_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_lista INTEGER NOT NULL REFERENCES listas_compra(id) ON DELETE CASCADE,
+    id_producto TEXT NOT NULL,
+    cantidad REAL NOT NULL DEFAULT 1,
+    UNIQUE(id_lista, id_producto)
+);
 """
 
 
@@ -124,3 +144,25 @@ def _migrar_esquema(conexion: sqlite3.Connection) -> None:
             "ALTER TABLE productos ADD COLUMN tienda TEXT DEFAULT 'mercadona'"
         )
         conexion.commit()
+    conexion.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS favoritos (
+            id_producto TEXT PRIMARY KEY REFERENCES productos(id) ON DELETE CASCADE,
+            anadido_en TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS listas_compra (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            creada_en TEXT NOT NULL,
+            actualizada_en TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS listas_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_lista INTEGER NOT NULL REFERENCES listas_compra(id) ON DELETE CASCADE,
+            id_producto TEXT NOT NULL,
+            cantidad REAL NOT NULL DEFAULT 1,
+            UNIQUE(id_lista, id_producto)
+        );
+        """
+    )
+    conexion.commit()

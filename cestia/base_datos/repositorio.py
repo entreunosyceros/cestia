@@ -507,6 +507,232 @@ class Repositorio:
                 )
         return disparadas
 
+    # --- Favoritos ---
+
+    def listar_favoritos(self) -> list[dict[str, Any]]:
+        filas = self.conexion.execute(
+            """
+            SELECT f.anadido_en, p.*
+            FROM favoritos f
+            JOIN productos p ON p.id = f.id_producto
+            ORDER BY f.anadido_en DESC
+            """
+        ).fetchall()
+        return [self._con_alias(dict(f)) for f in filas]
+
+    def ids_favoritos(self) -> set[str]:
+        filas = self.conexion.execute("SELECT id_producto FROM favoritos").fetchall()
+        return {str(f["id_producto"]) for f in filas}
+
+    def es_favorito(self, id_producto: str) -> bool:
+        fila = self.conexion.execute(
+            "SELECT 1 FROM favoritos WHERE id_producto = ?", (id_producto,)
+        ).fetchone()
+        return fila is not None
+
+    def favorito_anadir(self, id_producto: str) -> None:
+        self.conexion.execute(
+            "INSERT OR IGNORE INTO favoritos (id_producto, anadido_en) VALUES (?, ?)",
+            (id_producto, _ahora()),
+        )
+        self.conexion.commit()
+
+    def favorito_quitar(self, id_producto: str) -> None:
+        self.conexion.execute(
+            "DELETE FROM favoritos WHERE id_producto = ?", (id_producto,)
+        )
+        self.conexion.commit()
+
+    # --- Listas de la compra ---
+
+    def listar_listas_compra(self) -> list[dict[str, Any]]:
+        filas = self.conexion.execute(
+            """
+            SELECT l.*,
+                (SELECT COUNT(*) FROM listas_items i WHERE i.id_lista = l.id) AS num_items
+            FROM listas_compra l
+            ORDER BY l.actualizada_en DESC
+            """
+        ).fetchall()
+        return [dict(f) for f in filas]
+
+    def crear_lista_compra(self, nombre: str) -> int:
+        cuando = _ahora()
+        cursor = self.conexion.execute(
+            """
+            INSERT INTO listas_compra (nombre, creada_en, actualizada_en)
+            VALUES (?, ?, ?)
+            """,
+            (nombre.strip(), cuando, cuando),
+        )
+        self.conexion.commit()
+        return int(cursor.lastrowid)
+
+    def eliminar_lista_compra(self, id_lista: int) -> None:
+        self.conexion.execute("DELETE FROM listas_compra WHERE id = ?", (id_lista,))
+        self.conexion.commit()
+
+    def items_lista_compra(self, id_lista: int) -> list[dict[str, Any]]:
+        filas = self.conexion.execute(
+            """
+            SELECT i.cantidad, p.*
+            FROM listas_items i
+            JOIN productos p ON p.id = i.id_producto
+            WHERE i.id_lista = ?
+            ORDER BY i.id
+            """,
+            (id_lista,),
+        ).fetchall()
+        return [self._con_alias(dict(f)) for f in filas]
+
+    def lista_anadir_producto(
+        self, id_lista: int, id_producto: str, cantidad: float = 1.0
+    ) -> None:
+        existente = self.conexion.execute(
+            "SELECT cantidad FROM listas_items WHERE id_lista = ? AND id_producto = ?",
+            (id_lista, id_producto),
+        ).fetchone()
+        if existente:
+            self.conexion.execute(
+                """
+                UPDATE listas_items SET cantidad = ?
+                WHERE id_lista = ? AND id_producto = ?
+                """,
+                (float(existente["cantidad"]) + cantidad, id_lista, id_producto),
+            )
+        else:
+            self.conexion.execute(
+                """
+                INSERT INTO listas_items (id_lista, id_producto, cantidad)
+                VALUES (?, ?, ?)
+                """,
+                (id_lista, id_producto, cantidad),
+            )
+        self.conexion.execute(
+            "UPDATE listas_compra SET actualizada_en = ? WHERE id = ?",
+            (_ahora(), id_lista),
+        )
+        self.conexion.commit()
+
+    def lista_quitar_producto(self, id_lista: int, id_producto: str) -> None:
+        self.conexion.execute(
+            "DELETE FROM listas_items WHERE id_lista = ? AND id_producto = ?",
+            (id_lista, id_producto),
+        )
+        self.conexion.execute(
+            "UPDATE listas_compra SET actualizada_en = ? WHERE id = ?",
+            (_ahora(), id_lista),
+        )
+        self.conexion.commit()
+
+    def cargar_lista_en_cesta(self, id_lista: int) -> int:
+        items = self.items_lista_compra(id_lista)
+        for item in items:
+            self.cesta_anadir(item["id"], float(item.get("cantidad") or 1))
+        return len(items)
+
+    def guardar_cesta_en_lista(self, id_lista: int) -> int:
+        items = self.items_cesta()
+        for item in items:
+            self.lista_anadir_producto(
+                id_lista, item["id"], float(item.get("cantidad") or 1)
+            )
+        return len(items)
+
+    def duplicar_compra_en_cesta(self, id_compra: int) -> int:
+        lineas = self.lineas_de_compra(id_compra)
+        anadidos = 0
+        for linea in lineas:
+            pid = linea.get("id_producto")
+            if not pid:
+                continue
+            producto = self.obtener_producto(pid)
+            if not producto:
+                self.guardar_producto(
+                    {
+                        "id": pid,
+                        "nombre": linea["nombre"],
+                        "precio_unidad": linea["precio_unidad"],
+                        "categoria": linea.get("categoria"),
+                        "actualizado_en": _ahora(),
+                    }
+                )
+            self.cesta_anadir(pid, float(linea["cantidad"]))
+            anadidos += 1
+        return anadidos
+
+    # --- Presupuesto ---
+
+    CLAVE_PRESUPUESTO_SEM = "presupuesto_semanal"
+    CLAVE_PRESUPUESTO_MES = "presupuesto_mensual"
+
+    def obtener_presupuesto_semanal(self) -> float | None:
+        valor = self.obtener_ajuste(self.CLAVE_PRESUPUESTO_SEM, "")
+        if not valor.strip():
+            return None
+        try:
+            return float(valor)
+        except ValueError:
+            return None
+
+    def obtener_presupuesto_mensual(self) -> float | None:
+        valor = self.obtener_ajuste(self.CLAVE_PRESUPUESTO_MES, "")
+        if not valor.strip():
+            return None
+        try:
+            return float(valor)
+        except ValueError:
+            return None
+
+    def guardar_presupuestos(
+        self,
+        *,
+        semanal: float | None = None,
+        mensual: float | None = None,
+    ) -> None:
+        if semanal is not None:
+            self.guardar_ajuste(
+                self.CLAVE_PRESUPUESTO_SEM,
+                str(semanal) if semanal > 0 else "",
+            )
+        if mensual is not None:
+            self.guardar_ajuste(
+                self.CLAVE_PRESUPUESTO_MES,
+                str(mensual) if mensual > 0 else "",
+            )
+
+    def gasto_semana_actual(self) -> float:
+        semanas = self.gasto_semanal(1)
+        return float(semanas[0]["total"]) if semanas else 0.0
+
+    def gasto_mes_actual(self) -> float:
+        mes_actual = datetime.now(timezone.utc).astimezone().strftime("%Y-%m")
+        fila = self.conexion.execute(
+            """
+            SELECT COALESCE(SUM(total), 0) AS total
+            FROM compras
+            WHERE substr(comprado_en, 1, 7) = ?
+            """,
+            (mes_actual,),
+        ).fetchone()
+        return float(fila["total"]) if fila else 0.0
+
+    def resumen_presupuesto(self) -> dict[str, Any]:
+        sem = self.obtener_presupuesto_semanal()
+        mes = self.obtener_presupuesto_mensual()
+        gasto_sem = self.gasto_semana_actual()
+        gasto_mes = self.gasto_mes_actual()
+        totales_cesta = self.totales_cesta()
+        return {
+            "presupuesto_semanal": sem,
+            "presupuesto_mensual": mes,
+            "gasto_semana": gasto_sem,
+            "gasto_mes": gasto_mes,
+            "cesta_actual": totales_cesta["coste"],
+            "restante_semana": (sem - gasto_sem) if sem is not None else None,
+            "restante_mes": (mes - gasto_mes) if mes is not None else None,
+        }
+
     def obtener_ajuste(self, clave: str, por_defecto: str = "") -> str:
         fila = self.conexion.execute(
             "SELECT valor FROM ajustes WHERE clave = ?", (clave,)

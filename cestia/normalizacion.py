@@ -2,7 +2,140 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_GENERICOS_NOMBRE = {
+    "aceite", "agua", "arroz", "azucar", "azúcar", "bebida", "café", "cafe",
+    "carne", "cerveza", "chocolate", "cola", "crema", "detergente", "dulce",
+    "filete", "fruta", "galletas", "harina", "huevos", "huevo", "jugo",
+    "leche", "mantequilla", "mermelada", "pan", "pasta", "pescado", "pizza",
+    "pollo", "queso", "refresco", "sal", "salsa", "snack", "sopa", "té", "te",
+    "tomate", "vino", "yogur", "yogurt", "zumo", "pack", "packs", "lonchas",
+    "semidesnatada", "desnatada", "entera", "fresca", "fresco", "natural",
+    "integral", "extra", "virgen", "eco", "bio", "sin", "con", "del", "de",
+    "la", "el", "los", "las", "para", "y", "en", "galicia", "asturiana",
+    "pais", "país", "vasco", "navarra",
+}
+
+_UNIDADES_ENVASE = {
+    "brik", "botella", "lata", "pack", "ud", "uds", "g", "kg", "ml", "l",
+    "litro", "litros", "gramos", "kilos", "unidad", "unidades", "caja",
+}
+
+
+def inferir_marca(
+    nombre: str | None,
+    marca: str | None = None,
+    *,
+    fallback: str | None = None,
+) -> str | None:
+    """Devuelve marca explícita o una estimación razonable a partir del nombre."""
+    if marca is not None and str(marca).strip():
+        limpia = str(marca).strip()
+        if limpia.lower() not in {"none", "null", "unknown", "-"}:
+            return limpia
+
+    texto = (nombre or "").strip()
+    if not texto:
+        return fallback
+
+    principal = re.split(r"[,|·•]", texto, maxsplit=1)[0].strip()
+    tokens = [t for t in re.split(r"\s+", principal) if t]
+    if len(tokens) < 2:
+        return fallback
+
+    candidatos: list[str] = []
+    i = len(tokens) - 1
+    while i >= 0:
+        tok = tokens[i]
+        bajo = re.sub(r"[^0-9a-záéíóúüñ]", "", tok.lower())
+        if not bajo or bajo in _UNIDADES_ENVASE or bajo.isdigit():
+            i -= 1
+            continue
+        if bajo in _GENERICOS_NOMBRE:
+            break
+        if tok[:1].isupper() or tok.isupper() or (len(tok) > 2 and tok.isalnum()):
+            candidatos.append(tok)
+            i -= 1
+            # marcas de 2 palabras tipo "Dia Láctea" / "LA CANTARA"
+            if i >= 0:
+                prev = tokens[i]
+                prev_bajo = re.sub(r"[^0-9a-záéíóúüñ]", "", prev.lower())
+                if (
+                    prev[:1].isupper()
+                    and prev_bajo not in _GENERICOS_NOMBRE
+                    and prev_bajo not in _UNIDADES_ENVASE
+                    and not prev_bajo.isdigit()
+                ):
+                    candidatos.append(prev)
+                    i -= 1
+            break
+        i -= 1
+
+    if candidatos:
+        marca_est = " ".join(reversed(candidatos)).strip(" ,.-")
+        if marca_est and marca_est.lower() not in _GENERICOS_NOMBRE:
+            return marca_est
+    return fallback
+
+
+_STOPWORDS_BUSQUEDA = {
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "y", "o", "en", "con", "para", "por", "a", "al", "the",
+    "producto", "productos", "articulo", "artículos", "articulo", "articulos",
+}
+
+# Cualificadores que el usuario añade pero a menudo no figuran en el nombre del súper.
+_CUALIFICADORES_OPCIONALES = {
+    "fresco", "fresca", "frescos", "frescas",
+    "congelado", "congelada", "congelados", "congeladas",
+    "natural", "naturales", "casero", "casera", "caseros", "caseras",
+    "aprox", "aproximado", "aproximada", "granel",
+}
+
+
+def tokens_consulta(consulta: str) -> list[str]:
+    """Palabras significativas de una búsqueda (sin stopwords cortas)."""
+    palabras = re.findall(r"[0-9a-záéíóúüñ]+", (consulta or "").casefold())
+    return [p for p in palabras if len(p) > 2 and p not in _STOPWORDS_BUSQUEDA]
+
+
+def coincide_consulta(consulta: str, nombre: str | None) -> bool:
+    """True si el nombre cubre los términos clave de la consulta.
+
+    Consultas cortas (≤3 tokens) exigen todos los términos obligatorios; las
+    largas, al menos 2/3. Los cualificadores («fresco», «congelado»…) son
+    opcionales: si no están en el nombre, no descartan el producto.
+    Evita falsos positivos tipo «manzana» → «manguera» / «lomo» → «lona».
+    """
+    tokens = tokens_consulta(consulta)
+    if not tokens:
+        return True
+    obligatorios = [t for t in tokens if t not in _CUALIFICADORES_OPCIONALES]
+    if not obligatorios:
+        # Solo cualificadores (p. ej. «frescos»): no filtrar por nombre.
+        return True
+
+    palabras = set(re.findall(r"[0-9a-záéíóúüñ]+", (nombre or "").casefold()))
+    if not palabras:
+        return False
+
+    def _cubre(token: str) -> bool:
+        for w in palabras:
+            if w == token:
+                return True
+            # Prefijos solo entre palabras «largas» (evita manzana≈m por «20 m»).
+            if len(token) >= 4 and len(w) >= 4:
+                if w.startswith(token) or token.startswith(w):
+                    return True
+        return False
+
+    aciertos = sum(1 for t in obligatorios if _cubre(t))
+    if len(obligatorios) <= 3:
+        return aciertos == len(obligatorios)
+    minimo = max(2, (len(obligatorios) * 2 + 2) // 3)
+    return aciertos >= minimo
 
 
 def _a_dinero(valor: Any) -> float | None:
@@ -39,6 +172,10 @@ def normalizar_producto(bruto: dict[str, Any], *, origen: str = "api") -> dict[s
         or bruto.get("label")
         or "Producto"
     )
+    marca = inferir_marca(
+        nombre,
+        bruto.get("brand") or (bruto.get("details") or {}).get("brand"),
+    )
     miniatura = bruto.get("thumbnail") or bruto.get("image_url")
     fotos = bruto.get("photos")
     if not miniatura and isinstance(fotos, list) and fotos:
@@ -56,7 +193,7 @@ def normalizar_producto(bruto: dict[str, Any], *, origen: str = "api") -> dict[s
     return {
         "id": str(bruto.get("id") or bruto.get("objectID") or ""),
         "nombre": nombre,
-        "marca": bruto.get("brand") or (bruto.get("details") or {}).get("brand"),
+        "marca": marca,
         "envase": envase,
         "miniatura": miniatura,
         "precio_unidad": precio_unidad,
@@ -74,7 +211,7 @@ def normalizar_producto(bruto: dict[str, Any], *, origen: str = "api") -> dict[s
         "categorias_brutas": bruto.get("categories") or [],
         # alias compatibles con código que aún use claves EN de la API
         "name": nombre,
-        "brand": bruto.get("brand") or (bruto.get("details") or {}).get("brand"),
+        "brand": marca,
         "packaging": envase,
         "thumbnail": miniatura,
         "unit_price": precio_unidad,
