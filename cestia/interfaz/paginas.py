@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -727,6 +728,9 @@ class PaginaCesta(QWidget):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Producto", "Cant.", "Precio", "Subtotal", ""])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.verticalHeader().setVisible(False)
         layout.addWidget(self.table, 1)
 
         self.totals = QLabel()
@@ -739,7 +743,7 @@ class PaginaCesta(QWidget):
         layout.addWidget(self.optima)
 
         row = QHBoxLayout()
-        save = QPushButton("Guardar compra")
+        save = QPushButton("Registrar gasto")
         save.clicked.connect(self.guardar_compra)
         calc = QPushButton("Calcular óptima")
         calc.setProperty("secundario", True)
@@ -762,9 +766,11 @@ class PaginaCesta(QWidget):
         self.table.setRowCount(len(items))
         for i, item in enumerate(items):
             self.table.setItem(i, 0, QTableWidgetItem(item["name"]))
-            qty = QDoubleSpinBox()
-            qty.setRange(0.1, 99)
-            qty.setValue(float(item.get('cantidad') or item.get('quantity')))
+            qty = QSpinBox()
+            qty.setRange(1, 99)
+            qty.setValue(
+                max(1, int(round(float(item.get("cantidad") or item.get("quantity") or 1))))
+            )
             qty.valueChanged.connect(
                 lambda v, pid=item["id"]: (self.repositorio.cesta_fijar_cantidad(pid, v), self.actualizar())
             )
@@ -855,7 +861,11 @@ class PaginaCesta(QWidget):
         if pid is None:
             QMessageBox.information(self, "Cesta", "La cesta está vacía.")
             return
-        QMessageBox.information(self, "Compra guardada", f"Compra #{pid} guardada en el historial.")
+        QMessageBox.information(
+            self,
+            "Gasto registrado",
+            f"Gasto #{pid} guardado en el registro de gastos.",
+        )
         self.actualizar()
 
     def vaciar(self) -> None:
@@ -863,12 +873,19 @@ class PaginaCesta(QWidget):
         self.actualizar()
 
 
-class PaginaHistorial(QWidget):
+class PaginaRegistroGasto(QWidget):
     def __init__(self, repositorio, parent=None) -> None:
         super().__init__(parent)
         self.repositorio = repositorio
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Historial de compras", objectName="TituloPagina"))
+        layout.addWidget(QLabel("Registro de gasto", objectName="TituloPagina"))
+        layout.addWidget(
+            QLabel(
+                "Anota lo que gastaste al terminar una compra real "
+                "(desde la cesta o desde una lista).",
+                objectName="Atenuado",
+            )
+        )
         self.insight = QLabel()
         self.insight.setWordWrap(True)
         layout.addWidget(self.insight)
@@ -881,43 +898,120 @@ class PaginaHistorial(QWidget):
         split.addWidget(self.detail)
         split.setStretchFactor(1, 2)
         layout.addWidget(split, 1)
+        self._purchases: list[dict[str, Any]] = []
+        self._id_gasto_seleccionado: int | None = None
         btns = QHBoxLayout()
-        dup = QPushButton("Duplicar en cesta")
+        dup = QPushButton("Duplicar gasto")
         dup.clicked.connect(self._duplicar)
+        eliminar = QPushButton("Eliminar gasto")
+        eliminar.setProperty("secundario", True)
+        eliminar.clicked.connect(self._eliminar)
         btn = QPushButton("Actualizar")
         btn.setProperty("secundario", True)
         btn.clicked.connect(self.actualizar)
         btns.addWidget(dup)
+        btns.addWidget(eliminar)
         btns.addWidget(btn)
         btns.addStretch()
         layout.addLayout(btns)
 
-    def _duplicar(self) -> None:
+    def _gasto_seleccionado(self) -> dict[str, Any] | None:
+        compras = getattr(self, "_purchases", [])
+        if self._id_gasto_seleccionado is not None:
+            for compra in compras:
+                if compra["id"] == self._id_gasto_seleccionado:
+                    return compra
         row = self.list.currentRow()
-        if row < 0 or row >= len(getattr(self, "_purchases", [])):
-            QMessageBox.information(self, "Historial", "Selecciona una compra.")
+        if row < 0 or row >= len(compras):
+            return None
+        return compras[row]
+
+    def _duplicar(self) -> None:
+        gasto = self._gasto_seleccionado()
+        if gasto is None:
+            QMessageBox.information(
+                self, "Registro de gasto", "Selecciona un gasto registrado."
+            )
             return
-        pid = self._purchases[row]["id"]
-        n = self.repositorio.duplicar_compra_en_cesta(pid)
+        pid = int(gasto["id"])
+        nuevo_id = self.repositorio.duplicar_registro_gasto(pid)
+        if nuevo_id is None:
+            QMessageBox.warning(
+                self,
+                "Registro de gasto",
+                f"No se pudo duplicar el gasto #{pid}: no tiene productos asociados.",
+            )
+            return
+        self.actualizar()
+        for i, compra in enumerate(self._purchases):
+            if compra["id"] == nuevo_id:
+                self.list.setCurrentRow(i)
+                break
         QMessageBox.information(
-            self, "Cesta", f"{n} productos de la compra #{pid} añadidos a la cesta."
+            self,
+            "Gasto duplicado",
+            f"Se ha creado el gasto #{nuevo_id} como copia del #{pid}.",
         )
 
+    def _eliminar(self) -> None:
+        gasto = self._gasto_seleccionado()
+        if gasto is None:
+            QMessageBox.information(
+                self, "Registro de gasto", "Selecciona un gasto registrado."
+            )
+            return
+        total = formatear_euros(gasto.get("total"))
+        if (
+            QMessageBox.question(
+                self,
+                "Eliminar gasto",
+                f"¿Eliminar el gasto #{gasto['id']} ({total})?",
+            )
+            != QMessageBox.Yes
+        ):
+            return
+        self.repositorio.eliminar_registro_gasto(gasto["id"])
+        self.actualizar()
+
     def actualizar(self) -> None:
+        id_previo = self._id_gasto_seleccionado
         self.insight.setText(self.repositorio.insight_gastos())
         self._purchases = self.repositorio.listar_compras()
+        self.list.blockSignals(True)
         self.list.clear()
         for p in self._purchases:
             self.list.addItem(
                 f"#{p['id']}  {(p.get('comprado_en') or '')[:16]}  —  {formatear_euros(p['total'])}"
             )
+        fila = 0
+        if id_previo is not None:
+            for i, compra in enumerate(self._purchases):
+                if compra["id"] == id_previo:
+                    fila = i
+                    break
+        if self._purchases:
+            self.list.setCurrentRow(fila)
+        else:
+            self._id_gasto_seleccionado = None
+            self.detail.clear()
+        self.list.blockSignals(False)
+        if self._purchases:
+            self._show(self.list.currentRow())
 
     def _show(self, row: int) -> None:
         if row < 0 or row >= len(getattr(self, "_purchases", [])):
+            self._id_gasto_seleccionado = None
             return
         p = self._purchases[row]
+        self._id_gasto_seleccionado = int(p["id"])
         items = self.repositorio.lineas_de_compra(p["id"])
-        lines = [f"Compra #{p['id']} · {p.get('comprado_en')}", f"Total: {formatear_euros(p['total'])}", ""]
+        lines = [
+            f"Gasto #{p['id']} · {p.get('comprado_en')}",
+            f"Total: {formatear_euros(p['total'])}",
+        ]
+        if p.get("notas"):
+            lines.append(f"Notas: {p['notas']}")
+        lines.append("")
         for it in items:
             lines.append(
                 f"- {it['cantidad']:g} × {it['nombre']} @ {formatear_euros(it['precio_unidad'])} "
@@ -928,6 +1022,7 @@ class PaginaHistorial(QWidget):
 
 class PaginaComparador(QWidget):
     abrir_producto = Signal(str)
+    ir_a_busqueda = Signal()
 
     def __init__(self, repositorio, catalogo=None, parent=None) -> None:
         super().__init__(parent)
@@ -937,10 +1032,23 @@ class PaginaComparador(QWidget):
         layout.addWidget(QLabel("Comparador de precios", objectName="TituloPagina"))
         layout.addWidget(
             QLabel(
-                "Evolución respecto a hace ~6 meses (según tu historial local)",
+                "Evolución del precio respecto a hace ~6 meses. "
+                "Los productos entran solos al buscarlos y abrir su ficha.",
                 objectName="Atenuado",
             )
         )
+        ayuda = QLabel(
+            "<b>Cómo añadir productos a esta lista</b><br>"
+            "1. Ve a <b>Productos</b> y busca un artículo.<br>"
+            "2. Abre su ficha (doble clic): CestIA guarda el precio en tu equipo.<br>"
+            "3. Vuelve al <b>Comparador</b>: el producto aparecerá aquí.<br>"
+            "4. Repite con el tiempo o pulsa <b>Refrescar precios</b> para ver si sube o baja.<br>"
+            "<span>Nota: la pestaña <b>Comparar</b> sirve para ver dos productos "
+            "lado a lado desde la ficha (botón «Comparar»).</span>"
+        )
+        ayuda.setWordWrap(True)
+        ayuda.setObjectName("Atenuado")
+        layout.addWidget(ayuda)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["Producto", "Antes", "Hoy", "Cambio", "ID"]
@@ -957,13 +1065,12 @@ class PaginaComparador(QWidget):
         layout.addWidget(self.status)
 
         row = QHBoxLayout()
-        self.btn_actualizar = QPushButton("Actualizar")
+        buscar = QPushButton("Buscar productos")
+        buscar.clicked.connect(self.ir_a_busqueda.emit)
+        self.btn_actualizar = QPushButton("Refrescar precios")
         self.btn_actualizar.clicked.connect(self.actualizar_precios)
-        self.btn_limpiar = QPushButton("Limpiar lista")
-        self.btn_limpiar.setProperty("secundario", True)
-        self.btn_limpiar.clicked.connect(self.limpiar)
+        row.addWidget(buscar)
         row.addWidget(self.btn_actualizar)
-        row.addWidget(self.btn_limpiar)
         row.addStretch()
         layout.addLayout(row)
 
@@ -1006,31 +1113,26 @@ class PaginaComparador(QWidget):
         filas = []
         for p in self.repositorio.productos_con_historial(80):
             cmp_ = self.repositorio.comparar_precio(p["id"], dias_atras=180)
-            if not cmp_ or cmp_.get("precio_antiguo") is None:
-                continue
-            filas.append(cmp_)
+            if cmp_:
+                filas.append(cmp_)
         return filas
 
     def _mostrar_filas(self, filas: list) -> None:
         self._rellenar(filas)
+        seguimiento = len(self.repositorio.productos_con_historial(80))
         if filas:
             self.status.setText(
-                f"{len(filas)} productos con historial de precios. "
-                "Doble clic para abrir la ficha."
+                f"{len(filas)} productos en seguimiento de precios "
+                f"({seguimiento} con historial guardado). "
+                "Doble clic en una fila para abrir la ficha."
             )
         else:
             self.status.setText(
-                "No hay productos con historial aún. "
-                "Busca productos para ir guardando precios."
+                "Aún no hay productos en seguimiento. "
+                "Pulsa «Buscar productos», abre fichas y vuelve aquí."
             )
 
-    def limpiar(self) -> None:
-        self.table.setRowCount(0)
-        self.status.setText("Lista vacía. Pulsa Actualizar para volver a cargarla.")
-
     def _rellenar(self, filas: list) -> None:
-        from PySide6.QtGui import QBrush, QColor
-
         self.table.setRowCount(len(filas))
         for i, c in enumerate(filas):
             prod = c.get("producto") or c.get("product") or {}
@@ -1040,18 +1142,37 @@ class PaginaComparador(QWidget):
             nombre = prod.get("nombre") or prod.get("name") or prod.get("id") or ""
             self.table.setItem(i, 0, QTableWidgetItem(str(nombre)))
             self.table.setItem(
-                i, 1, QTableWidgetItem(formatear_euros(c.get("precio_antiguo")))
+                i,
+                1,
+                QTableWidgetItem(
+                    formatear_euros(c.get("precio_antiguo"))
+                    if c.get("precio_antiguo") is not None
+                    else "—"
+                ),
             )
             self.table.setItem(
-                i, 2, QTableWidgetItem(formatear_euros(c.get("precio_nuevo")))
+                i,
+                2,
+                QTableWidgetItem(
+                    formatear_euros(c.get("precio_nuevo"))
+                    if c.get("precio_nuevo") is not None
+                    else "—"
+                ),
             )
-            txt = f"{pct:+.1f} %" if pct is not None else "—"
-            item = QTableWidgetItem(txt)
-            if pct is not None:
-                color = QColor("#b42318") if pct > 0 else QColor("#0f6b45")
-                item.setForeground(QBrush(color))
-            self.table.setItem(i, 3, item)
+            if pct is not None and pct != 0:
+                flecha = "▲" if pct > 0 else "▼"
+                badge = QLabel(f"{flecha} {pct:+.1f} %")
+                badge.setObjectName("BadgeSube" if pct > 0 else "BadgeBaja")
+                badge.setProperty("tablaComparador", True)
+                badge.setAlignment(Qt.AlignCenter)
+                badge.style().unpolish(badge)
+                badge.style().polish(badge)
+                self.table.setCellWidget(i, 3, badge)
+            else:
+                txt = f"{pct:+.1f} %" if pct is not None else "—"
+                self.table.setItem(i, 3, QTableWidgetItem(txt))
             self.table.setItem(i, 4, QTableWidgetItem(str(prod.get("id") or "")))
+            self.table.setRowHeight(i, 40)
 
     def _abrir_fila(self, fila: int, _col: int) -> None:
         item = self.table.item(fila, 4)
@@ -1157,7 +1278,7 @@ class PaginaEstadisticas(QWidget):
             layout.addWidget(QLabel("Matplotlib no disponible para gráficas."))
 
         layout.addWidget(QLabel("Gasto semanal de compra"))
-        pista = QLabel("Semanas ISO (lunes–domingo), según las compras guardadas")
+        pista = QLabel("Semanas ISO (lunes–domingo), según los gastos registrados")
         pista.setObjectName("Atenuado")
         layout.addWidget(pista)
 
@@ -1255,7 +1376,7 @@ class PaginaEstadisticas(QWidget):
             )
         if not semanas:
             self.resumen_semanal.setText(
-                "Aún no hay compras guardadas para calcular el gasto semanal."
+                "Aún no hay gastos registrados para calcular el gasto semanal."
             )
             return
         ultima = semanas[0]
@@ -1845,10 +1966,11 @@ class PaginaAbout(QWidget):
             "Nutri-Score (ficha de tienda u Open Food Facts), nutrición, "
             "gráfico de evolución y alternativas más baratas\n"
             "• Favoritos y listas de la compra reutilizables\n"
-            "• Comparador de evolución (~6 meses) y comparador de 2 productos\n"
+            "• Comparador de evolución de precios (~6 meses; productos al abrir fichas)\n"
+            "• Comparar: dos productos lado a lado desde la ficha\n"
             "• Cesta con totales nutricionales, presupuesto semanal/mensual "
             "y cálculo de cesta óptima multi-tienda\n"
-            "• Historial de compras con opción de duplicar en la cesta\n"
+            "• Registro de gasto con opción de duplicar o eliminar gastos\n"
             "• Alertas de precio y estadísticas de gasto "
             "(semanal, mensual, anual y por categoría)\n"
             "• IA opcional con Google Gemini: asistente de compras "
@@ -1875,7 +1997,7 @@ class PaginaAbout(QWidget):
             "dato, puede venir de la ficha de la tienda (p. ej. Día) o de "
             "Open Food Facts (colaborativo, no oficial); si no hay, la app "
             "lo indica en la ficha.\n"
-            "• El historial, el comparador y las estadísticas solo reflejan "
+            "• El registro de gastos, el comparador y las estadísticas solo reflejan "
             "lo que hayas buscado y guardado en este equipo.\n"
             "• La «cesta óptima» y las marcas inferidas son orientativas; "
             "no garantizan el precio en caja ni la equivalencia exacta "

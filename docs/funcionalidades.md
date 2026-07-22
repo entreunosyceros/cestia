@@ -11,8 +11,9 @@
 | **Productos** | Búsqueda multi-tienda en paralelo, columna de supermercado, filtros (precio, Nutri-Score, rebajados, sin gluten) y agrupación |
 | **Ficha** | Precio, foto, ingredientes, alérgenos, Nutri-Score (tienda + Open Food Facts), nutrición, gráfico de evolución (fechas en español) y alternativas más baratas |
 | **Cesta** | Cantidades, coste total, presupuesto semanal/mensual, cesta óptima multi-tienda y resumen nutricional estimado |
-| **Historial** | Compras guardadas, duplicar en cesta e insights de gasto |
-| **Comparador** | Evolución de precios (~6 meses) y comparación entre dos productos |
+| **Registro de gasto** | Gastos anotados manualmente, duplicar en cesta e insights de gasto |
+| **Comparador** | Evolución de precios (~6 meses); los productos entran al buscarlos y abrir su ficha |
+| **Comparar** | Comparación lado a lado de dos productos (desde la ficha, botón «Comparar») |
 | **Alertas** | Aviso cuando un producto baja de un precio objetivo |
 | **Estadísticas** | Gasto semanal, mensual, anual, por categoría e inflación de cesta |
 | **IA** | Asistente de compras multi-supermercado (Google Gemini), respuestas con Markdown y barra de progreso mientras piensa |

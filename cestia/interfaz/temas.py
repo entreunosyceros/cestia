@@ -100,6 +100,15 @@ QHeaderView::section {
     border: none;
     font-weight: 700;
 }
+QHeaderView:vertical {
+    background: #1e2824;
+    border: none;
+}
+QHeaderView::section:vertical {
+    background: #243029;
+    color: #7dcea0;
+    border: none;
+}
 QTableCornerButton::section { background: #243029; border: none; }
 QTableWidget::item { color: #e8f0ec; background: #1e2824; }
 QTableWidget::item:selected { background: #2a4a38; color: #ffffff; }
@@ -108,6 +117,20 @@ QLabel#Atenuado { color: #9aaba2; }
 QLabel#Precio { font-size: 20px; font-weight: 800; color: #7dcea0; }
 QLabel#BadgeSube { color: #f87171; font-weight: 700; }
 QLabel#BadgeBaja { color: #4ade80; font-weight: 700; }
+QTableWidget QLabel#BadgeSube[tablaComparador="true"] {
+    color: #fca5a5;
+    font-weight: 800;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: #3d2020;
+}
+QTableWidget QLabel#BadgeBaja[tablaComparador="true"] {
+    color: #86efac;
+    font-weight: 800;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: #1a3028;
+}
 QLabel#BadgeOferta {
     color: #ffffff;
     font-weight: 800;

@@ -3,15 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QPushButton,
     QStackedWidget,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -29,7 +32,7 @@ from cestia.interfaz.paginas import (
     PaginaConfiguracion,
     PaginaEscaner,
     PaginaEstadisticas,
-    PaginaHistorial,
+    PaginaRegistroGasto,
     PaginaIA,
     PaginaProducto,
 )
@@ -75,7 +78,7 @@ class VentanaPrincipal(QMainWindow):
         self.pagina_busqueda = PaginaBusqueda(self.catalogo, self.repositorio)
         self.pagina_producto = PaginaProducto(self.catalogo, self.repositorio)
         self.pagina_cesta = PaginaCesta(self.repositorio, self.catalogo)
-        self.pagina_historial = PaginaHistorial(self.repositorio)
+        self.pagina_registro_gasto = PaginaRegistroGasto(self.repositorio)
         self.pagina_comparador = PaginaComparador(self.repositorio, self.catalogo)
         self.pagina_alertas = PaginaAlertas(self.repositorio, self.catalogo)
         self.pagina_estadisticas = PaginaEstadisticas(self.repositorio)
@@ -94,7 +97,7 @@ class VentanaPrincipal(QMainWindow):
             ("Cesta", self.pagina_cesta),
             ("Favoritos", self.pagina_favoritos),
             ("Listas", self.pagina_listas),
-            ("Historial", self.pagina_historial),
+            ("Registro de gasto", self.pagina_registro_gasto),
             ("Comparador", self.pagina_comparador),
             ("Comparar", self.pagina_comparar),
             ("Alertas", self.pagina_alertas),
@@ -129,8 +132,12 @@ class VentanaPrincipal(QMainWindow):
 
         self.pagina_busqueda.abrir_producto.connect(self.mostrar_producto)
         self.pagina_comparador.abrir_producto.connect(self.mostrar_producto)
+        self.pagina_comparador.ir_a_busqueda.connect(
+            lambda: self._ir_a(0, self.pagina_busqueda)
+        )
         self.pagina_escaner.abrir_producto.connect(self.mostrar_producto)
         self.pagina_favoritos.abrir_producto.connect(self.mostrar_producto)
+        self.pagina_listas.abrir_producto.connect(self.mostrar_producto)
         self.pagina_producto.abrir_producto.connect(self.mostrar_producto)
         self.pagina_producto.back.clicked.connect(
             lambda: self._ir_a(0, self.pagina_busqueda)
@@ -145,6 +152,86 @@ class VentanaPrincipal(QMainWindow):
         self._configurar_atajos()
         self._ir_a(0, self.pagina_busqueda)
         self._comprobar_alertas_silencioso()
+        self._cerrando = False
+        self._configurar_bandeja_sistema()
+
+    def _icono_aplicacion(self) -> QIcon:
+        if RUTA_LOGO_MINI.exists():
+            icono = QIcon(str(RUTA_LOGO_MINI))
+            if not icono.isNull():
+                return icono
+        return self.windowIcon()
+
+    def _configurar_bandeja_sistema(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        icono = self._icono_aplicacion()
+        if not icono.isNull():
+            self.setWindowIcon(icono)
+        self.bandeja = QSystemTrayIcon(icono, self)
+        self.bandeja.setToolTip("CestIA")
+
+        menu = QMenu()
+        self.accion_ventana = menu.addAction("Ocultar ventana")
+        self.accion_ventana.triggered.connect(self._alternar_ventana)
+        menu.addSeparator()
+        accion_salir = menu.addAction("Salir")
+        accion_salir.triggered.connect(self._salir_aplicacion)
+        self.bandeja.setContextMenu(menu)
+        self.bandeja.activated.connect(self._bandeja_activada)
+        self.bandeja.show()
+        self._actualizar_menu_bandeja()
+
+        app = QApplication.instance()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(False)
+
+    def _actualizar_menu_bandeja(self) -> None:
+        if hasattr(self, "accion_ventana"):
+            self.accion_ventana.setText(
+                "Ocultar ventana" if self.isVisible() else "Mostrar ventana"
+            )
+
+    def _alternar_ventana(self) -> None:
+        if self.isVisible():
+            self._ocultar_ventana()
+        else:
+            self._mostrar_ventana()
+
+    def _mostrar_ventana(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        self._actualizar_menu_bandeja()
+
+    def _ocultar_ventana(self) -> None:
+        self.hide()
+        self._actualizar_menu_bandeja()
+
+    def _bandeja_activada(self, motivo: QSystemTrayIcon.ActivationReason) -> None:
+        if motivo == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._mostrar_ventana()
+
+    def _salir_aplicacion(self) -> None:
+        self._cerrando = True
+        if hasattr(self, "bandeja"):
+            self.bandeja.hide()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._cerrando or not hasattr(self, "bandeja"):
+            event.accept()
+            return
+        event.ignore()
+        self._ocultar_ventana()
+        self.bandeja.showMessage(
+            "CestIA",
+            "La aplicación sigue en la bandeja del sistema.",
+            QSystemTrayIcon.MessageIcon.Information,
+            2500,
+        )
 
     def _aplicar_tema(self, tema: str) -> None:
         self.setStyleSheet(obtener_hoja_estilos(tema))

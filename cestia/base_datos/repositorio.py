@@ -284,20 +284,31 @@ class Repositorio:
             return float(tamano) * 10.0
         return 1.0
 
-    def guardar_compra(self, notas: str = "") -> int | None:
-        items = self.items_cesta()
+    def _registrar_gasto_items(
+        self, items: list[dict[str, Any]], notas: str = ""
+    ) -> int | None:
         if not items:
             return None
-        totales = self.totales_cesta()
+        coste = 0.0
+        for item in items:
+            cantidad = float(item.get("cantidad") or item.get("quantity") or 0)
+            precio = item.get("precio_unidad")
+            if precio is None:
+                precio = item.get("unit_price")
+            coste += cantidad * float(precio or 0)
         cursor = self.conexion.execute(
             "INSERT INTO compras (comprado_en, total, notas) VALUES (?, ?, ?)",
-            (_ahora(), totales["coste"], notas),
+            (_ahora(), coste, notas),
         )
         id_compra = int(cursor.lastrowid)
         for item in items:
-            cantidad = float(item["cantidad"])
-            precio = float(item["precio_unidad"] or 0)
+            cantidad = float(item.get("cantidad") or item.get("quantity") or 0)
+            precio = item.get("precio_unidad")
+            if precio is None:
+                precio = item.get("unit_price")
+            precio = float(precio or 0)
             factor = self._factor_nutricion(item) * cantidad
+            nombre = item.get("nombre") or item.get("name") or str(item.get("id") or "")
             self.conexion.execute(
                 """
                 INSERT INTO lineas_compra (
@@ -308,9 +319,9 @@ class Repositorio:
                 """,
                 (
                     id_compra,
-                    item["id"],
-                    item["nombre"],
-                    item.get("categoria"),
+                    item.get("id") or item.get("id_producto"),
+                    nombre,
+                    item.get("categoria") or item.get("category"),
                     cantidad,
                     precio,
                     cantidad * precio,
@@ -330,9 +341,24 @@ class Repositorio:
                     if item.get("sal") is not None else None,
                 ),
             )
-        self.cesta_vaciar()
         self.conexion.commit()
         return id_compra
+
+    def guardar_compra(self, notas: str = "") -> int | None:
+        items = self.items_cesta()
+        id_compra = self._registrar_gasto_items(items, notas)
+        if id_compra is not None:
+            self.cesta_vaciar()
+        return id_compra
+
+    def guardar_lista_en_registro(self, id_lista: int) -> int | None:
+        fila = self.conexion.execute(
+            "SELECT nombre FROM listas_compra WHERE id = ?", (id_lista,)
+        ).fetchone()
+        if not fila:
+            return None
+        items = self.items_lista_compra(id_lista)
+        return self._registrar_gasto_items(items, f"Lista: {fila['nombre']}")
 
     def listar_compras(self, limite: int = 100) -> list[dict[str, Any]]:
         filas = self.conexion.execute(
@@ -347,6 +373,10 @@ class Repositorio:
             (id_compra,),
         ).fetchall()
         return [dict(f) for f in filas]
+
+    def eliminar_registro_gasto(self, id_compra: int) -> None:
+        self.conexion.execute("DELETE FROM compras WHERE id = ?", (id_compra,))
+        self.conexion.commit()
 
     def resumen_gastos(self) -> dict[str, Any]:
         filas = self.conexion.execute(
@@ -453,7 +483,7 @@ class Repositorio:
                 f"Este año ({anual[-1]['anio']}) llevas {anual[-1]['total']:.2f} €."
             )
         if not lineas:
-            return "Aún no hay compras guardadas. Guarda tu primera cesta para ver el historial."
+            return "Aún no hay gastos registrados. Registra tu primera cesta o lista para ver el resumen."
         return "\n".join(lineas)
 
     def anadir_alerta(
@@ -585,6 +615,26 @@ class Repositorio:
         ).fetchall()
         return [self._con_alias(dict(f)) for f in filas]
 
+    def totales_lista_compra(self, id_lista: int) -> dict[str, float | int]:
+        items = self.items_lista_compra(id_lista)
+        coste = 0.0
+        sin_precio = 0
+        for item in items:
+            cantidad = float(item.get("cantidad") or item.get("quantity") or 0)
+            precio = item.get("precio_unidad")
+            if precio is None:
+                precio = item.get("unit_price")
+            if precio is None:
+                sin_precio += 1
+                continue
+            coste += cantidad * float(precio)
+        return {
+            "coste": coste,
+            "cost": coste,
+            "productos": len(items),
+            "sin_precio": sin_precio,
+        }
+
     def lista_anadir_producto(
         self, id_lista: int, id_producto: str, cantidad: float = 1.0
     ) -> None:
@@ -614,6 +664,25 @@ class Repositorio:
         )
         self.conexion.commit()
 
+    def lista_fijar_cantidad(
+        self, id_lista: int, id_producto: str, cantidad: float
+    ) -> None:
+        if cantidad <= 0:
+            self.lista_quitar_producto(id_lista, id_producto)
+            return
+        self.conexion.execute(
+            """
+            UPDATE listas_items SET cantidad = ?
+            WHERE id_lista = ? AND id_producto = ?
+            """,
+            (cantidad, id_lista, id_producto),
+        )
+        self.conexion.execute(
+            "UPDATE listas_compra SET actualizada_en = ? WHERE id = ?",
+            (_ahora(), id_lista),
+        )
+        self.conexion.commit()
+
     def lista_quitar_producto(self, id_lista: int, id_producto: str) -> None:
         self.conexion.execute(
             "DELETE FROM listas_items WHERE id_lista = ? AND id_producto = ?",
@@ -633,11 +702,65 @@ class Repositorio:
 
     def guardar_cesta_en_lista(self, id_lista: int) -> int:
         items = self.items_cesta()
+        if not items:
+            return 0
+        self.conexion.execute(
+            "DELETE FROM listas_items WHERE id_lista = ?", (id_lista,)
+        )
+        guardados = 0
         for item in items:
-            self.lista_anadir_producto(
-                id_lista, item["id"], float(item.get("cantidad") or 1)
+            id_producto = item.get("id")
+            if not id_producto:
+                continue
+            cantidad = float(item.get("cantidad") or item.get("quantity") or 1)
+            self.conexion.execute(
+                """
+                INSERT INTO listas_items (id_lista, id_producto, cantidad)
+                VALUES (?, ?, ?)
+                """,
+                (id_lista, id_producto, cantidad),
             )
-        return len(items)
+            guardados += 1
+        self.conexion.execute(
+            "UPDATE listas_compra SET actualizada_en = ? WHERE id = ?",
+            (_ahora(), id_lista),
+        )
+        self.conexion.commit()
+        return guardados
+
+    def duplicar_registro_gasto(self, id_compra: int) -> int | None:
+        compra = self.conexion.execute(
+            "SELECT * FROM compras WHERE id = ?", (id_compra,)
+        ).fetchone()
+        if not compra:
+            return None
+        lineas = self.lineas_de_compra(id_compra)
+        if not lineas:
+            return None
+        notas = (compra["notas"] or "").strip()
+        if notas:
+            notas = f"{notas} (copia)"
+        else:
+            notas = f"Copia del gasto #{id_compra}"
+        items: list[dict[str, Any]] = []
+        for linea in lineas:
+            items.append(
+                {
+                    "id": linea.get("id_producto"),
+                    "nombre": linea["nombre"],
+                    "categoria": linea.get("categoria"),
+                    "cantidad": linea["cantidad"],
+                    "precio_unidad": linea["precio_unidad"],
+                    "energia_kcal": linea.get("energia_kcal"),
+                    "proteinas": linea.get("proteinas"),
+                    "hidratos": linea.get("hidratos"),
+                    "grasas": linea.get("grasas"),
+                    "fibra": linea.get("fibra"),
+                    "azucares": linea.get("azucares"),
+                    "sal": linea.get("sal"),
+                }
+            )
+        return self._registrar_gasto_items(items, notas)
 
     def duplicar_compra_en_cesta(self, id_compra: int) -> int:
         lineas = self.lineas_de_compra(id_compra)
