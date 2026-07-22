@@ -87,33 +87,10 @@ class AsistenteIA:
             CLAVE_AJUSTE_MODELO, self.normalizar_modelo(modelo)
         )
 
-    @classmethod
-    def normalizar_modelo(cls, modelo: str | None) -> str:
+    @staticmethod
+    def normalizar_modelo(modelo: str | None) -> str:
         elegido = (modelo or MODELO_POR_DEFECTO).strip()
         return MIGRACION_MODELOS.get(elegido, elegido or MODELO_POR_DEFECTO)
-
-    @property
-    def clave_api(self) -> str:
-        return self.obtener_clave()
-
-    @property
-    def modelo(self) -> str:
-        return self.obtener_modelo()
-
-    def disponible(self) -> bool:
-        clave = self.obtener_clave()
-        if not clave:
-            return False
-        try:
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models"
-                f"?key={clave}"
-            )
-            with httpx.Client(timeout=5.0) as cliente:
-                respuesta = cliente.get(url)
-            return respuesta.status_code < 500
-        except httpx.HTTPError:
-            return False
 
     def comprobar_conexion(self) -> tuple[bool, str]:
         clave = self.obtener_clave()
@@ -192,10 +169,8 @@ class AsistenteIA:
         except httpx.HTTPError as exc:
             return f"No se pudo contactar con Gemini.\nDetalle: {exc}"
 
-    @classmethod
-    def _mensaje_error_http(
-        cls, codigo: int, cuerpo: str, modelo: str
-    ) -> str:
+    @staticmethod
+    def _mensaje_error_http(codigo: int, cuerpo: str, modelo: str) -> str:
         detalle = cuerpo[:700]
         sugeridos = ", ".join(f"«{m}»" for m in MODELOS_GRATUITOS_SUGERIDOS)
         if codigo == 429 and (

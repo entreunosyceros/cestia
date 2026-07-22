@@ -83,18 +83,23 @@ def agrupar_multi_tienda(
             filas.extend(miembros)
             continue
         mejor = min(con_precio, key=lambda m: _precio(m) or 1e9)
-        peor = max(con_precio, key=lambda m: _precio(m) or 0)
-        ahorro = None
-        pm, pp = _precio(mejor), _precio(peor)
-        if pm is not None and pp is not None and pp > pm:
-            ahorro = round(pp - pm, 2)
+        pm = _precio(mejor)
         for m in miembros:
             m = dict(m)
+            precio_m = _precio(m)
             m["_grupo_tamano"] = len(miembros)
             m["_mejor_tienda"] = mejor.get("tienda")
             m["_mejor_precio"] = pm
-            m["_ahorro_max"] = ahorro
             m["_es_mejor"] = m.get("id") == mejor.get("id")
+            # Ahorro respecto a ESTE producto (no peor vs mejor del grupo).
+            if (
+                pm is not None
+                and precio_m is not None
+                and precio_m > pm + 0.001
+            ):
+                m["_ahorro_vs_mejor"] = round(precio_m - pm, 2)
+            else:
+                m["_ahorro_vs_mejor"] = None
             filas.append(m)
     filas.sort(
         key=lambda p: (

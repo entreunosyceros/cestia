@@ -550,10 +550,6 @@ class Repositorio:
         ).fetchall()
         return [self._con_alias(dict(f)) for f in filas]
 
-    def ids_favoritos(self) -> set[str]:
-        filas = self.conexion.execute("SELECT id_producto FROM favoritos").fetchall()
-        return {str(f["id_producto"]) for f in filas}
-
     def es_favorito(self, id_producto: str) -> bool:
         fila = self.conexion.execute(
             "SELECT 1 FROM favoritos WHERE id_producto = ?", (id_producto,)
@@ -761,28 +757,6 @@ class Repositorio:
                 }
             )
         return self._registrar_gasto_items(items, notas)
-
-    def duplicar_compra_en_cesta(self, id_compra: int) -> int:
-        lineas = self.lineas_de_compra(id_compra)
-        anadidos = 0
-        for linea in lineas:
-            pid = linea.get("id_producto")
-            if not pid:
-                continue
-            producto = self.obtener_producto(pid)
-            if not producto:
-                self.guardar_producto(
-                    {
-                        "id": pid,
-                        "nombre": linea["nombre"],
-                        "precio_unidad": linea["precio_unidad"],
-                        "categoria": linea.get("categoria"),
-                        "actualizado_en": _ahora(),
-                    }
-                )
-            self.cesta_anadir(pid, float(linea["cantidad"]))
-            anadidos += 1
-        return anadidos
 
     # --- Presupuesto ---
 

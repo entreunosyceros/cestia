@@ -171,29 +171,36 @@ class VentanaPrincipal(QMainWindow):
         self.bandeja = QSystemTrayIcon(icono, self)
         self.bandeja.setToolTip("CestIA")
 
-        menu = QMenu()
-        self.accion_ventana = menu.addAction("Ocultar ventana")
+        self.menu_bandeja = QMenu()
+        self.accion_ventana = self.menu_bandeja.addAction("Ocultar ventana")
         self.accion_ventana.triggered.connect(self._alternar_ventana)
-        menu.addSeparator()
-        accion_salir = menu.addAction("Salir")
+        self.menu_bandeja.addSeparator()
+        accion_salir = self.menu_bandeja.addAction("Salir")
         accion_salir.triggered.connect(self._salir_aplicacion)
-        self.bandeja.setContextMenu(menu)
+        # Actualizar el texto justo antes de mostrar el menú (estado real de la ventana).
+        self.menu_bandeja.aboutToShow.connect(self._actualizar_menu_bandeja)
+        self.bandeja.setContextMenu(self.menu_bandeja)
         self.bandeja.activated.connect(self._bandeja_activada)
         self.bandeja.show()
-        self._actualizar_menu_bandeja()
 
         app = QApplication.instance()
         if app is not None:
             app.setQuitOnLastWindowClosed(False)
 
+    def _ventana_visible(self) -> bool:
+        """True si la ventana principal está mostrada (aunque esté minimizada)."""
+        return self.isVisible()
+
     def _actualizar_menu_bandeja(self) -> None:
-        if hasattr(self, "accion_ventana"):
-            self.accion_ventana.setText(
-                "Ocultar ventana" if self.isVisible() else "Mostrar ventana"
-            )
+        if not hasattr(self, "accion_ventana"):
+            return
+        if self._ventana_visible():
+            self.accion_ventana.setText("Ocultar ventana")
+        else:
+            self.accion_ventana.setText("Mostrar ventana")
 
     def _alternar_ventana(self) -> None:
-        if self.isVisible():
+        if self._ventana_visible():
             self._ocultar_ventana()
         else:
             self._mostrar_ventana()
@@ -219,6 +226,14 @@ class VentanaPrincipal(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.quit()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._actualizar_menu_bandeja()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._actualizar_menu_bandeja()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._cerrando or not hasattr(self, "bandeja"):

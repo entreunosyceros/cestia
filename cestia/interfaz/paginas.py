@@ -168,7 +168,7 @@ class PaginaBusqueda(QWidget):
                 "€/ud ref.",
                 "Marca",
                 "Oferta",
-                "Mejor precio",
+                "Comparación",
             ]
         )
         header = self.table.horizontalHeader()
@@ -319,17 +319,24 @@ class PaginaBusqueda(QWidget):
                 oferta.setObjectName("BadgeOferta")
             oferta.setAlignment(Qt.AlignCenter)
             self.table.setCellWidget(i, 6, oferta)
-            mejor_txt = "—"
-            if p.get("_ahorro_max"):
-                mejor_txt = (
-                    f"{nombre_tienda(p.get('_mejor_tienda'))} "
-                    f"({formatear_euros(p.get('_mejor_precio'))}) "
-                    f"−{formatear_euros(p['_ahorro_max'])}"
-                )
-            elif p.get("_es_mejor") and p.get("_grupo_tamano", 1) > 1:
-                mejor_txt = "✓ Más barato"
-            self.table.setItem(i, 7, QTableWidgetItem(mejor_txt))
+            self.table.setItem(i, 7, QTableWidgetItem(self._texto_comparacion(p)))
             self.table.setRowHeight(i, 56)
+
+    @staticmethod
+    def _texto_comparacion(producto: dict[str, Any]) -> str:
+        """Texto claro para la columna Comparación (multi-tienda)."""
+        if producto.get("_grupo_tamano", 1) <= 1:
+            return "—"
+        if producto.get("_es_mejor"):
+            return "✓ Más barato"
+        ahorro = producto.get("_ahorro_vs_mejor")
+        tienda = nombre_tienda(producto.get("_mejor_tienda"))
+        precio = formatear_euros(producto.get("_mejor_precio"))
+        if ahorro:
+            return f"Más barato en {tienda}: {precio} (ahorras {formatear_euros(ahorro)})"
+        if producto.get("_mejor_precio") is not None:
+            return f"Más barato en {tienda}: {precio}"
+        return "—"
 
     def _open_row(self, row: int, _col: int) -> None:
         if 0 <= row < len(self._results):
@@ -469,7 +476,6 @@ class PaginaProducto(QWidget):
             tipo="peligro",
             titulo="Alérgenos",
         )
-        self.alergenos = self.tarjeta_alergenos.lbl_contenido
         info.addWidget(self.tarjeta_alergenos)
 
         self.tarjeta_nutricion = TarjetaModerna(
@@ -480,7 +486,6 @@ class PaginaProducto(QWidget):
                 "A veces pueden referirse al producto ya preparado/reconstituido."
             ),
         )
-        self.nutrition = self.tarjeta_nutricion.lbl_contenido
         info.addWidget(self.tarjeta_nutricion)
 
         panel_alts = QFrame()
@@ -545,7 +550,10 @@ class PaginaProducto(QWidget):
         ]
         self.meta.setText(" · ".join(meta_bits))
         cargar_miniatura(self.image, product.get("miniatura") or product.get("thumbnail"), 220)
-        self.price.setText(formatear_euros(product.get("precio_unidad") if product.get("precio_unidad") is not None else product.get("unit_price")))
+        precio_unidad = product.get("precio_unidad")
+        if precio_unidad is None:
+            precio_unidad = product.get("unit_price")
+        self.price.setText(formatear_euros(precio_unidad))
         if es_rebajado(product, history):
             self.badge_oferta.setText("  REBAJADO  ")
             self.badge_oferta.show()
@@ -554,10 +562,12 @@ class PaginaProducto(QWidget):
         self.grafico_precio.establecer_historial(history)
         es_fav = self.repositorio.es_favorito(product["id"])
         self.btn_fav.setText("★ Favorito" if es_fav else "☆ Favorito")
-        if product.get("precio_bulto") if product.get("precio_bulto") is not None else product.get("bulk_price"):
-            self.bulk.setText(
-                f"{formatear_euros(product.get('precio_bulto') or product.get('bulk_price'))}/{product.get('formato_tamano') or product.get('size_format') or 'ud'}"
-            )
+        precio_bulto = product.get("precio_bulto")
+        if precio_bulto is None:
+            precio_bulto = product.get("bulk_price")
+        if precio_bulto:
+            formato = product.get("formato_tamano") or product.get("size_format") or "ud"
+            self.bulk.setText(f"{formatear_euros(precio_bulto)}/{formato}")
         else:
             self.bulk.setText("")
         nutriscore = product.get("nutriscore")
@@ -566,22 +576,27 @@ class PaginaProducto(QWidget):
         else:
             self.nutri.establecer_no_disponible()
 
-        if product.get("precio_unidad") if product.get("precio_unidad") is not None else product.get("unit_price") is not None:
-            self.alert_price.setValue(max(0.01, float(product.get("precio_unidad") or product.get("unit_price")) * 0.9))
+        if precio_unidad is not None:
+            self.alert_price.setValue(max(0.01, float(precio_unidad) * 0.9))
 
         precio_ant = compare.get("precio_antiguo") if compare else None
         precio_nue = compare.get("precio_nuevo") if compare else None
         if compare and precio_ant is not None and precio_nue is not None:
             pct = compare.get("cambio_pct")
-            arrow = "▲" if (pct or 0) > 0 else "▼"
             color = "BadgeSube" if (pct or 0) > 0 else "BadgeBaja"
             self.compare.setObjectName(color)
-            self.compare.setText(
-                f"Hace ~6 meses: {formatear_euros(precio_ant)}  →  "
-                f"Hoy: {formatear_euros(precio_nue)}   "
-                f"{arrow} {pct:+.1f}%" if pct is not None else
-                f"Histórico: {formatear_euros(precio_ant)} → {formatear_euros(precio_nue)}"
-            )
+            if pct is not None:
+                arrow = "▲" if pct > 0 else "▼"
+                texto_compare = (
+                    f"Hace ~6 meses: {formatear_euros(precio_ant)}  →  "
+                    f"Hoy: {formatear_euros(precio_nue)}   {arrow} {pct:+.1f}%"
+                )
+            else:
+                texto_compare = (
+                    f"Histórico: {formatear_euros(precio_ant)} → "
+                    f"{formatear_euros(precio_nue)}"
+                )
+            self.compare.setText(texto_compare)
             self.compare.style().unpolish(self.compare)
             self.compare.style().polish(self.compare)
         elif len(history) <= 1:
