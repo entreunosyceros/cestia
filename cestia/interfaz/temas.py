@@ -114,6 +114,14 @@ QTableWidget::item { color: #e8f0ec; background: #1e2824; }
 QTableWidget::item:selected { background: #2a4a38; color: #ffffff; }
 QLabel#TituloPagina { font-size: 24px; font-weight: 800; color: #7dcea0; }
 QLabel#Atenuado { color: #9aaba2; }
+QLabel#AvisoFrescor {
+    color: #d8f3e4;
+    background: #243029;
+    border: 1px solid #3d5248;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: 600;
+}
 QLabel#Precio { font-size: 20px; font-weight: 800; color: #7dcea0; }
 QLabel#BadgeSube { color: #f87171; font-weight: 700; }
 QLabel#BadgeBaja { color: #4ade80; font-weight: 700; }

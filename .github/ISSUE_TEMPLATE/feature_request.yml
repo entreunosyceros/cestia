@@ -1,0 +1,63 @@
+name: Solicitud de mejora
+description: Proponer una nueva función o mejora en CestIA
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe el problema o la necesidad de compra diaria antes que la solución concreta.
+        Recuerda que CestIA es una app **local**, no afiliada a las tiendas, y depende de sus catálogos públicos.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - Búsqueda / filtros / multi-tienda
+        - Ficha de producto / nutrición
+        - Cesta / cesta óptima / presupuesto
+        - Listas / favoritos
+        - Registro de gasto / estadísticas
+        - Comparador / alertas
+        - Ofertas / folletos
+        - IA (Gemini)
+        - Escáner
+        - Configuración / temas
+        - Nueva tienda / cliente
+        - Documentación
+        - Arranque / instalación
+        - Otro
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: ¿Qué problema o necesidad quieres resolver?
+      placeholder: "Ej.: Al buscar algodón no aparecen productos de parafarmacia aunque el súper los venda."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solución propuesta (opcional)
+      description: Cómo imaginas que debería funcionar
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Alcance
+      options:
+        - label: Estoy dispuesto/a a contribuir con un PR si la propuesta encaja
+          required: false

@@ -221,6 +221,14 @@ QLabel#TituloPagina {
     color: #0a3d2a;
 }
 QLabel#Atenuado { color: #5a6b62; }
+QLabel#AvisoFrescor {
+    color: #0a3d2a;
+    background: #e6f4ec;
+    border: 1px solid #c5ddd0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: 600;
+}
 QLabel#Precio {
     font-size: 20px;
     font-weight: 800;

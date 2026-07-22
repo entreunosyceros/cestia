@@ -9,7 +9,11 @@ from urllib.parse import quote
 
 import httpx
 
-from cestia.cliente.limite_y_cache import CacheDisco, LimitadorPeticiones
+from cestia.cliente.limite_y_cache import (
+    CacheDisco,
+    LimitadorPeticiones,
+    anotar_frescor,
+)
 from cestia.configuracion import obtener_configuracion
 
 registrador = logging.getLogger(__name__)
@@ -40,9 +44,9 @@ class ClienteAlcampo:
             return []
 
         clave = f"alcampo:v2:busqueda:{consulta.lower()}:{limite}"
-        acierto = self.cache.obtener(clave)
-        if acierto is not None:
-            return acierto
+        entrada = self.cache.obtener_entrada(clave)
+        if entrada is not None:
+            return anotar_frescor(entrada["datos"], entrada["guardado_en"])
 
         self.limitador.adquirir()
         url = URL_BUSQUEDA.format(consulta=quote(consulta))
@@ -75,6 +79,7 @@ class ClienteAlcampo:
             raise ErrorAPIAlcampo(f"No se pudo leer el catálogo Alcampo: {exc}") from exc
 
         productos = _productos_desde_estado(estado, limite=limite)
+        anotar_frescor(productos)
         self.cache.guardar(clave, productos, obtener_configuracion().ttl_cache_busqueda)
         return productos
 

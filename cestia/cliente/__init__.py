@@ -153,9 +153,11 @@ class ClienteMercadona:
             f"{self.configuracion.almacen_mercadona}:"
             f"{self.configuracion.idioma_mercadona}"
         )
-        acierto = self.cache.obtener(clave_cache)
-        if acierto is not None:
-            return acierto
+        from cestia.cliente.limite_y_cache import anotar_frescor
+
+        entrada = self.cache.obtener_entrada(clave_cache)
+        if entrada is not None:
+            return anotar_frescor(entrada["datos"], entrada["guardado_en"])
 
         parametros = urlencode(
             {"query": consulta, "hitsPerPage": max(1, min(limite, 50))}
@@ -175,6 +177,7 @@ class ClienteMercadona:
             "nbHits": datos.get("nbHits", 0),
             "query": consulta,
         }
+        anotar_frescor(resultado)
         self.cache.guardar(
             clave_cache, resultado, self.configuracion.ttl_cache_busqueda
         )

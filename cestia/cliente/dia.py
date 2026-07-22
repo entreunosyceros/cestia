@@ -8,7 +8,11 @@ from urllib.parse import urlencode
 
 import httpx
 
-from cestia.cliente.limite_y_cache import CacheDisco, LimitadorPeticiones
+from cestia.cliente.limite_y_cache import (
+    CacheDisco,
+    LimitadorPeticiones,
+    anotar_frescor,
+)
 from cestia.configuracion import obtener_configuracion
 
 registrador = logging.getLogger(__name__)
@@ -43,9 +47,9 @@ class ClienteDia:
             return []
 
         clave = f"dia:v3:busqueda:{consulta.lower()}:{limite}"
-        acierto = self.cache.obtener(clave)
-        if acierto is not None:
-            return acierto
+        entrada = self.cache.obtener_entrada(clave)
+        if entrada is not None:
+            return anotar_frescor(entrada["datos"], entrada["guardado_en"])
 
         self.limitador.adquirir()
         parametros = {
@@ -88,6 +92,7 @@ class ClienteDia:
             for item in (datos.get("search_items") or [])
         ]
         productos = [p for p in productos if p.get("nombre")][:limite]
+        anotar_frescor(productos)
         self.cache.guardar(clave, productos, obtener_configuracion().ttl_cache_busqueda)
         return productos
 

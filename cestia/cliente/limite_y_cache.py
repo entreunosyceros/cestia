@@ -7,8 +7,67 @@ import json
 import threading
 import time
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+CLAVE_FRESOR = "_precios_actualizados_en"
+
+
+def anotar_frescor(datos: Any, guardado_en: float | None = None) -> Any:
+    """Marca cuándo se obtuvieron los precios (epoch → ISO local)."""
+    epoch = time.time() if guardado_en is None else float(guardado_en)
+    iso = datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+    if isinstance(datos, list):
+        for item in datos:
+            if isinstance(item, dict):
+                item[CLAVE_FRESOR] = iso
+    elif isinstance(datos, dict):
+        datos[CLAVE_FRESOR] = iso
+        for item in datos.get("hits") or []:
+            if isinstance(item, dict):
+                item[CLAVE_FRESOR] = iso
+    return datos
+
+
+def formatear_frescor(iso: str | None) -> str:
+    """Fecha y hora en formato español: dd/mm/aaaa HH:MM."""
+    if not iso:
+        return ""
+    try:
+        cuando = datetime.fromisoformat(iso)
+        if cuando.tzinfo is None:
+            cuando = cuando.astimezone()
+    except ValueError:
+        return iso
+    return cuando.strftime("%d/%m/%Y %H:%M")
+
+
+def resumen_frescor(productos: list[dict[str, Any]]) -> str:
+    """Resumen para la UI a partir de productos anotados."""
+    epochs: list[datetime] = []
+    for p in productos:
+        iso = p.get(CLAVE_FRESOR)
+        if not iso:
+            continue
+        try:
+            cuando = datetime.fromisoformat(str(iso))
+            if cuando.tzinfo is None:
+                cuando = cuando.astimezone()
+            epochs.append(cuando)
+        except ValueError:
+            continue
+    if not epochs:
+        return ""
+    mas_viejo = min(epochs)
+    mas_nuevo = max(epochs)
+    fmt = "%d/%m/%Y %H:%M"
+    if abs((mas_nuevo - mas_viejo).total_seconds()) < 90:
+        return f"Precios actualizados: {mas_nuevo.strftime(fmt)}"
+    return (
+        "Precios actualizados entre "
+        f"{mas_viejo.strftime(fmt)} y {mas_nuevo.strftime(fmt)}"
+    )
 
 
 class LimitadorPeticiones:
@@ -53,7 +112,8 @@ class CacheDisco:
         resumen = hashlib.sha256(clave.encode()).hexdigest()
         return self.raiz / f"{resumen}.json"
 
-    def obtener(self, clave: str) -> Any | None:
+    def obtener_entrada(self, clave: str) -> dict[str, Any] | None:
+        """Devuelve ``{"datos", "guardado_en"}`` si la entrada sigue vigente."""
         ruta = self._ruta(clave)
         with self._candado:
             if not ruta.exists():
@@ -65,7 +125,14 @@ class CacheDisco:
             if carga.get("caduca_en", 0) < time.time():
                 ruta.unlink(missing_ok=True)
                 return None
-            return carga.get("datos")
+            return {
+                "datos": carga.get("datos"),
+                "guardado_en": float(carga.get("guardado_en") or time.time()),
+            }
+
+    def obtener(self, clave: str) -> Any | None:
+        entrada = self.obtener_entrada(clave)
+        return None if entrada is None else entrada.get("datos")
 
     def guardar(self, clave: str, datos: Any, ttl_segundos: int) -> None:
         ruta = self._ruta(clave)

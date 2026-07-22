@@ -155,6 +155,10 @@ class PaginaBusqueda(QWidget):
         self.status = QLabel("")
         self.status.setObjectName("Atenuado")
         layout.addWidget(self.status)
+        self.aviso_precios = QLabel("")
+        self.aviso_precios.setObjectName("AvisoFrescor")
+        self.aviso_precios.setWordWrap(True)
+        layout.addWidget(self.aviso_precios)
         self.progreso = crear_barra_progreso()
         layout.addWidget(self.progreso)
 
@@ -220,6 +224,7 @@ class PaginaBusqueda(QWidget):
         if not q:
             return
         self.status.setText("Buscando…")
+        self.aviso_precios.setText("")
         self.table.setRowCount(0)
         mostrar_progreso(self.progreso, True)
 
@@ -233,6 +238,7 @@ class PaginaBusqueda(QWidget):
 
         def error(e):
             mostrar_progreso(self.progreso, False)
+            self.aviso_precios.setText("")
             self.status.setText(f"Error: {e}")
 
         ejecutar_en_hilo(work, ok, error)
@@ -265,10 +271,35 @@ class PaginaBusqueda(QWidget):
         self._on_results(filtrados)
 
     def _on_results(self, results: list[dict[str, Any]]) -> None:
+        from cestia.cliente.limite_y_cache import resumen_frescor
+
         self._results = results
-        self.status.setText(
-            f"{len(results)} resultados (precios guardados en historial local)"
-        )
+        consulta = self.query.text().strip()
+        if not results:
+            if consulta:
+                self.status.setText(f"Sin resultados para esa búsqueda («{consulta}»).")
+            else:
+                self.status.setText("Sin resultados para esa búsqueda.")
+            if getattr(self, "_raw_results", None):
+                self.aviso_precios.setText(
+                    "Hay productos en la búsqueda, pero ninguno cumple los filtros activos."
+                )
+            else:
+                self.aviso_precios.setText("")
+            self.table.setRowCount(0)
+            return
+
+        self.status.setText(f"{len(results)} resultados")
+        frescor = resumen_frescor(results)
+        if frescor:
+            self.aviso_precios.setText(
+                f"{frescor}. "
+                "Si hay caché, pueden diferir unos minutos del precio en la web de la tienda."
+            )
+        else:
+            self.aviso_precios.setText(
+                "No se pudo determinar cuándo se actualizaron estos precios."
+            )
         self.table.setRowCount(len(results))
         for i, p in enumerate(results):
             thumb = QLabel()

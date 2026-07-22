@@ -8,7 +8,11 @@ from urllib.parse import urlencode
 
 import httpx
 
-from cestia.cliente.limite_y_cache import CacheDisco, LimitadorPeticiones
+from cestia.cliente.limite_y_cache import (
+    CacheDisco,
+    LimitadorPeticiones,
+    anotar_frescor,
+)
 from cestia.configuracion import obtener_configuracion
 from cestia.normalizacion import coincide_consulta, inferir_marca
 
@@ -43,9 +47,9 @@ class ClienteLidl:
             return []
 
         clave = f"lidl:v3:busqueda:{consulta.lower()}:{limite}"
-        acierto = self.cache.obtener(clave)
-        if acierto is not None:
-            return acierto
+        entrada = self.cache.obtener_entrada(clave)
+        if entrada is not None:
+            return anotar_frescor(entrada["datos"], entrada["guardado_en"])
 
         self.limitador.adquirir()
         # Pedimos de más: luego filtramos ruido (bricolaje, juguetes, etc.).
@@ -90,7 +94,7 @@ class ClienteLidl:
                 codigo_estado=datos.get("status"),
             )
 
-        brutos: list[tuple[dict[str, Any], bool]] = []
+        brutos: list[tuple[dict[str, Any], int]] = []
         for item in datos.get("items") or []:
             if item.get("resultClass") != "product" and item.get("type") != "product":
                 continue
@@ -100,11 +104,19 @@ class ClienteLidl:
                 continue
             if not coincide_consulta(consulta, hit.get("nombre")):
                 continue
-            brutos.append((hit, _es_alimentacion_lidl(grid)))
+            if _es_ruido_lidl(grid):
+                prioridad = 3
+            elif _es_alimentacion_lidl(grid) or _es_parafarmacia_o_higiene_lidl(
+                grid, hit.get("nombre") or ""
+            ):
+                prioridad = 0
+            else:
+                prioridad = 1
+            brutos.append((hit, prioridad))
 
-        alimentos = [h for h, food in brutos if food]
-        elegidos = alimentos if alimentos else [h for h, _ in brutos]
-        productos = elegidos[:limite]
+        brutos.sort(key=lambda x: x[1])
+        productos = [h for h, _ in brutos][:limite]
+        anotar_frescor(productos)
         self.cache.guardar(clave, productos, obtener_configuracion().ttl_cache_busqueda)
         return productos
 
@@ -117,6 +129,73 @@ def _es_alimentacion_lidl(datos: dict[str, Any]) -> bool:
     return any(
         trozo in bajo
         for trozo in ("food", "aliment", "frescos", "bebida", "nevera")
+    )
+
+
+def _es_parafarmacia_o_higiene_lidl(datos: dict[str, Any], nombre: str) -> bool:
+    """Parafarmacia, higiene y cuidado personal (no deben filtrarse)."""
+    cat = str(datos.get("category") or "").casefold()
+    if any(
+        trozo in cat
+        for trozo in (
+            "pharma",
+            "pharmacy",
+            "beauty",
+            "care",
+            "hygiene",
+            "health",
+            "droger",
+            "body",
+            "personal",
+        )
+    ):
+        return True
+    bajo = (nombre or "").casefold()
+    return any(
+        trozo in bajo
+        for trozo in (
+            "algodón",
+            "algodon",
+            "oxigenad",
+            "betadine",
+            "antisépt",
+            "antisept",
+            "venda",
+            "gasas",
+            "tirita",
+            "suero",
+            "alcohol",
+            "termómetro",
+            "termometro",
+            "mascarilla",
+            "compresa",
+            "desinfect",
+            "ibuprofeno",
+            "paracetamol",
+            "apósit",
+            "aposit",
+            "bastoncill",
+            "toallitas",
+            "pañal",
+            "panal",
+        )
+    )
+
+
+def _es_ruido_lidl(datos: dict[str, Any]) -> bool:
+    """Bricolaje, juguetes, etc.: se dejan fuera si hay resultados útiles."""
+    cat = str(datos.get("category") or "").casefold()
+    return any(
+        trozo in cat
+        for trozo in (
+            "toy",
+            "diy",
+            "garden",
+            "furniture",
+            "tool",
+            "sport",
+            "electronic",
+        )
     )
 
 

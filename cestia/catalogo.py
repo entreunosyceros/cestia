@@ -74,24 +74,41 @@ _ORDEN_TIENDA = {
     "gadis": 7,
 }
 
-# Baja prioridad en el listado: fiambres / precocinados frente a fresco a granel.
-_RE_PROCESADO = re.compile(
-    r"fiambre|lonchas?|brasead\w*|al horno|en conserva|enlatad\w*|"
-    r"empanad\w*|precocin\w*|nachos|manguera|grifo|juguete",
-    re.IGNORECASE,
-)
-_RE_NO_ALIMENTO = re.compile(
+# Baja prioridad: ruido / no relevantes frente a lo que pide la consulta.
+_RE_RUIDO = re.compile(
+    r"manguera|grifo|juguete|bricolaje|taladro|tornillo|"
     r"comida perro|comida gato|mascot|\bpienso\b|arenas?\s+para|"
     r"compy|supreme compy",
     re.IGNORECASE,
 )
+_RE_PROCESADO = re.compile(
+    r"fiambre|lonchas?|brasead\w*|al horno|en conserva|enlatad\w*|"
+    r"empanad\w*|precocin\w*|nachos",
+    re.IGNORECASE,
+)
+# Consultas / productos de parafarmacia e higiene (no deben quedar fuera).
+_RE_PARAFARMACIA = re.compile(
+    r"algod[oó]n|oxigenad|betadine|antisept|venda|gasas?|tiritas?|"
+    r"parafarmac|farmac|suero\b|alcohol\b|term[oó]metro|mascarilla|"
+    r"gel\s+hidro|compresa|protegeslips?|preservativo|pomada|crema\s+solar|"
+    r"desinfect|agua\s+oxigen|ibuprofeno|paracetamol|aposito|apósito|"
+    r"bastoncill|higiene\s+intima|higiene\s+íntima|pañales?|toallitas",
+    re.IGNORECASE,
+)
 
 
-def _penalizacion_procesado(producto: dict[str, Any]) -> int:
-    """Ordena detrás precocinados, fiambres y comida para mascotas."""
+def _penalizacion_busqueda(producto: dict[str, Any], consulta: str) -> int:
+    """Ordena resultados: menos puntos = más arriba."""
     nombre = producto.get("nombre") or producto.get("name") or ""
-    if _RE_NO_ALIMENTO.search(nombre):
+    if _RE_RUIDO.search(nombre):
         return 5
+    consulta_farma = bool(_RE_PARAFARMACIA.search(consulta or ""))
+    producto_farma = bool(_RE_PARAFARMACIA.search(nombre))
+    if consulta_farma:
+        # Buscando parafarmacia: priorizar esos productos, no relegarlos.
+        return 0 if producto_farma else 2
+    if producto_farma:
+        return 0
     if not _RE_PROCESADO.search(nombre):
         return 0
     if re.search(r"fiambre|lonchas?|brasead|al horno", nombre, re.I):
@@ -251,7 +268,7 @@ class ServicioCatalogo:
 
         resultados.sort(
             key=lambda p: (
-                _penalizacion_procesado(p),
+                _penalizacion_busqueda(p, consulta),
                 _ORDEN_TIENDA.get((p.get("tienda") or "mercadona"), 9),
                 p.get("precio_unidad") is None,
                 p.get("precio_unidad") or 1e9,
@@ -266,7 +283,16 @@ class ServicioCatalogo:
         productos: list[dict[str, Any]] = []
         if etiqueta == "Mercadona":
             for acierto in (bruto or {}).get("hits") or []:
-                productos.append(self._persistir_mercadona(acierto, enriquecer=False))
+                producto = self._persistir_mercadona(acierto, enriquecer=False)
+                if acierto.get("_precios_actualizados_en"):
+                    producto["_precios_actualizados_en"] = acierto[
+                        "_precios_actualizados_en"
+                    ]
+                elif isinstance(bruto, dict) and bruto.get("_precios_actualizados_en"):
+                    producto["_precios_actualizados_en"] = bruto[
+                        "_precios_actualizados_en"
+                    ]
+                productos.append(producto)
             return productos
 
         persistidores = {
@@ -282,7 +308,10 @@ class ServicioCatalogo:
         if persistir is None:
             return productos
         for hit in bruto or []:
-            productos.append(persistir(hit, enriquecer=False))
+            producto = persistir(hit, enriquecer=False)
+            if isinstance(hit, dict) and hit.get("_precios_actualizados_en"):
+                producto["_precios_actualizados_en"] = hit["_precios_actualizados_en"]
+            productos.append(producto)
         return productos
 
     def obtener_producto(

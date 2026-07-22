@@ -1,0 +1,111 @@
+name: Informe de error
+description: Algo no funciona como debería en CestIA
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar un error. Cuanta más información des, más fácil será reproducirlo.
+        No incluyas claves Gemini, contenido de `.env` ni capturas con datos personales sensibles.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área afectada
+      options:
+        - Búsqueda de productos
+        - Ficha de producto / Nutri-Score
+        - Cesta
+        - Favoritos / Listas de la compra
+        - Registro de gasto
+        - Comparador de precios
+        - Comparar (dos productos)
+        - Alertas
+        - Estadísticas
+        - IA (Gemini)
+        - Escáner de códigos
+        - Configuración / tiendas / tema
+        - Bandeja del sistema
+        - Arranque (run_app.py / cestia.py)
+        - Cliente de una tienda concreta
+        - Otro
+    validations:
+      required: true
+
+  - type: input
+    id: stores
+    attributes:
+      label: Tiendas activas (si aplica)
+      description: P. ej. Mercadona, Carrefour, Froiz…
+      placeholder: "Mercadona + Carrefour"
+
+  - type: input
+    id: version
+    attributes:
+      label: Versión o commit
+      description: Versión de CestIA (`cestia/__init__.py`) o hash de commit
+      placeholder: "0.3.0 o main @ abc1234"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Pasos para reproducir
+      description: Lista numerada de acciones hasta ver el fallo
+      placeholder: |
+        1. Abrir Productos
+        2. Buscar «algodón»
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamiento actual
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs o capturas
+      description: Salida de terminal, traceback o capturas (sin claves ni datos personales)
+      render: shell
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Entorno
+      options:
+        - Linux
+        - Windows
+        - macOS
+        - No lo sé
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Versión de Python (si aplica)
+      placeholder: "3.12.x"
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmación
+      options:
+        - label: He buscado en issues abiertas y cerradas y no he encontrado un duplicado
+          required: true
+        - label: No adjunto `.env`, claves API ni `datos/cestia.db`
+          required: true
