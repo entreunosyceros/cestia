@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,6 +42,7 @@ from cestia.interfaz.paginas_extras import (
     PaginaListas,
 )
 from cestia.interfaz.progreso import crear_barra_progreso, mostrar_progreso
+from cestia.interfaz.trabajadores import ejecutar_en_hilo
 from cestia.interfaz.temas import obtener_hoja_estilos
 from cestia.tiendas import CLAVE_TEMA
 
@@ -85,7 +86,7 @@ class VentanaPrincipal(QMainWindow):
         self.pagina_ia = PaginaIA(self.asistente)
         self.pagina_escaner = PaginaEscaner(self.catalogo)
         self.pagina_favoritos = PaginaFavoritos(self.repositorio)
-        self.pagina_listas = PaginaListas(self.repositorio)
+        self.pagina_listas = PaginaListas(self.repositorio, self.catalogo)
         self.pagina_comparar = PaginaCompararProductos(self.repositorio)
         self.pagina_configuracion = PaginaConfiguracion(
             self.asistente, self.repositorio
@@ -131,6 +132,10 @@ class VentanaPrincipal(QMainWindow):
         envoltorio.addWidget(contenido, 1)
 
         self.pagina_busqueda.abrir_producto.connect(self.mostrar_producto)
+        self.pagina_busqueda.favoritos_cambiados.connect(
+            self.pagina_favoritos.actualizar
+        )
+        self.pagina_busqueda.listas_cambiadas.connect(self.pagina_listas.actualizar)
         self.pagina_comparador.abrir_producto.connect(self.mostrar_producto)
         self.pagina_comparador.ir_a_busqueda.connect(
             lambda: self._ir_a(0, self.pagina_busqueda)
@@ -147,13 +152,21 @@ class VentanaPrincipal(QMainWindow):
         self.pagina_producto.comparar_producto.connect(self._comparar_producto)
         self.pagina_producto.anadir_lista.connect(self._anadir_a_lista)
         self.pagina_configuracion.tema_cambiado.connect(self._aplicar_tema)
+        self.pagina_configuracion.ajustes_guardados.connect(
+            self._configurar_timer_alertas
+        )
+        self.pagina_registro_gasto.repetir_compra.connect(self._repetir_compra)
         self._aplicar_tema(self.repositorio.obtener_ajuste(CLAVE_TEMA, "claro"))
 
         self._configurar_atajos()
         self._ir_a(0, self.pagina_busqueda)
-        self._comprobar_alertas_silencioso()
+        self._comprobar_alertas_silencioso(refrescar=False)
         self._cerrando = False
         self._configurar_bandeja_sistema()
+        self._timer_alertas = QTimer(self)
+        self._timer_alertas.timeout.connect(self._comprobar_alertas_fondo)
+        self._configurar_timer_alertas()
+        self._precargar_precios_fondo()
 
     def _icono_aplicacion(self) -> QIcon:
         if RUTA_LOGO_MINI.exists():
@@ -365,12 +378,92 @@ class VentanaPrincipal(QMainWindow):
         QMessageBox.information(self, "Lista", "Producto guardado en la lista.")
         self.pagina_listas.actualizar()
 
-    def _comprobar_alertas_silencioso(self) -> None:
+    def _comprobar_alertas_silencioso(self, *, refrescar: bool = False) -> None:
+        if refrescar:
+            self._comprobar_alertas_fondo(mostrar_dialogo=True)
+            return
         disparadas = self.repositorio.comprobar_alertas()
         if disparadas:
-            texto = "\n".join(
-                f"• {t.get('nombre_producto')}: {t.get('precio_actual'):.2f} € "
-                f"(objetivo {t.get('precio_objetivo'):.2f} €)"
-                for t in disparadas
+            self._notificar_alertas(disparadas, mostrar_dialogo=True)
+
+    def _notificar_alertas(
+        self, disparadas: list, *, mostrar_dialogo: bool = False
+    ) -> None:
+        lineas = [
+            f"• {t.get('nombre_producto')}: {float(t.get('precio_actual') or 0):.2f} € "
+            f"(objetivo {float(t.get('precio_objetivo') or 0):.2f} €)"
+            for t in disparadas
+        ]
+        texto = "\n".join(lineas)
+        resumen = ", ".join(
+            f"{t.get('nombre_producto')} → {float(t.get('precio_actual') or 0):.2f} €"
+            for t in disparadas[:3]
+        )
+        if len(disparadas) > 3:
+            resumen += f" (+{len(disparadas) - 3} más)"
+        if hasattr(self, "bandeja"):
+            self.bandeja.showMessage(
+                "CestIA — Alerta de precio",
+                resumen,
+                QSystemTrayIcon.MessageIcon.Information,
+                8000,
             )
+        if mostrar_dialogo and self.isVisible():
             QMessageBox.information(self, "Alertas disparadas", texto)
+        self.pagina_alertas.actualizar()
+
+    def _configurar_timer_alertas(self) -> None:
+        if not hasattr(self, "_timer_alertas"):
+            return
+        if self.repositorio.alertas_automaticas_activas():
+            ms = int(self.repositorio.intervalo_alertas_horas() * 3600 * 1000)
+            self._timer_alertas.start(ms)
+        else:
+            self._timer_alertas.stop()
+
+    def _comprobar_alertas_fondo(self, *, mostrar_dialogo: bool = False) -> None:
+        def work():
+            for alerta in self.repositorio.listar_alertas(solo_activas=True):
+                try:
+                    self.catalogo.obtener_producto(
+                        alerta["id_producto"], enriquecer=False
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            return self.repositorio.comprobar_alertas()
+
+        ejecutar_en_hilo(
+            work,
+            lambda disparadas: (
+                self._notificar_alertas(disparadas, mostrar_dialogo=mostrar_dialogo)
+                if disparadas
+                else None
+            ),
+        )
+
+    def _precargar_precios_fondo(self) -> None:
+        ids = self.repositorio.ids_productos_seguimiento(limite=25)
+        if not ids:
+            return
+
+        def work():
+            return self.catalogo.actualizar_precios(ids, enriquecer=False)
+
+        ejecutar_en_hilo(work, lambda _: None)
+
+    def _repetir_compra(self, id_compra: int) -> None:
+        n = self.repositorio.cargar_gasto_en_cesta(id_compra, vaciar=False)
+        if n == 0:
+            QMessageBox.warning(
+                self,
+                "Repetir compra",
+                "No se pudieron cargar productos de ese gasto.",
+            )
+            return
+        self.pagina_cesta.actualizar()
+        self._ir_a(1, self.pagina_cesta)
+        QMessageBox.information(
+            self,
+            "Cesta",
+            f"{n} producto(s) añadidos a la cesta desde el gasto #{id_compra}.",
+        )

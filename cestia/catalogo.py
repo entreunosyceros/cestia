@@ -139,7 +139,7 @@ class ServicioCatalogo:
         self.cliente_lidl = cliente_lidl or obtener_cliente_lidl()
         self.cliente_dia = cliente_dia or obtener_cliente_dia()
         self.cliente_gadis = cliente_gadis or obtener_cliente_gadis()
-        self.off = off or ClienteOpenFoodFacts()
+        self.off = off or ClienteOpenFoodFacts(timeout=8.0)
 
     def buscar(self, consulta: str, limite: int = 24) -> list[dict[str, Any]]:
         """API síncrona (UI / hilos). Las tiendas se consultan en paralelo."""
@@ -314,10 +314,78 @@ class ServicioCatalogo:
             productos.append(producto)
         return productos
 
-    def obtener_producto(
-        self, id_producto: str, *, enriquecer: bool = True
+    @staticmethod
+    def _necesita_ficha_tienda(registro: dict[str, Any]) -> bool:
+        tienda = (registro.get("tienda") or registro.get("origen") or "").lower()
+        if tienda not in {"dia", "froiz", "lidl", "alcampo", "carrefour"}:
+            return False
+        if not registro.get("ean"):
+            return True
+        if not registro.get("nutriscore"):
+            return True
+        if tienda == "dia" and registro.get("energia_kcal") is None:
+            return True
+        return False
+
+    @staticmethod
+    def _necesita_off(registro: dict[str, Any]) -> bool:
+        if registro.get("nutriscore") and registro.get("energia_kcal") is not None:
+            if registro.get("ingredientes") and registro.get("alergenos"):
+                return False
+        if not registro.get("ean") and not registro.get("nombre"):
+            return False
+        if registro.get("nutriscore") and registro.get("proteinas") is not None:
+            return False
+        return True
+
+    @staticmethod
+    def _necesita_api_mercadona(registro: dict[str, Any]) -> bool:
+        if registro.get("precio_unidad") is None and registro.get("unit_price") is None:
+            return True
+        if not (registro.get("ingredientes") or registro.get("ingredients")):
+            return True
+        return False
+
+    def obtener_producto_local(self, id_producto: str) -> dict[str, Any] | None:
+        """Datos ya guardados en SQLite (respuesta inmediata para la ficha)."""
+        return self.repositorio.obtener_producto(id_producto)
+
+    def _enriquecer_producto_existente(
+        self, registro: dict[str, Any], *, refrescar_mercadona: bool = False
     ) -> dict[str, Any]:
-        if (
+        registro = dict(registro)
+        tienda = (registro.get("tienda") or "mercadona").lower()
+
+        if tienda == "mercadona" and (
+            refrescar_mercadona or self._necesita_api_mercadona(registro)
+        ):
+            bruto = self.cliente.obtener_producto(registro["id"])
+            return self._persistir_mercadona(bruto, enriquecer=True)
+
+        if self._necesita_ficha_tienda(registro):
+            registro = fusionar_ficha(registro, obtener_ficha_tienda(registro))
+
+        if self._necesita_off(registro):
+            registro = self._enriquecer_registro(registro, persistir=False)
+        elif registro.get("alergenos"):
+            registro["alergenos"] = deduplicar_alergenos(registro["alergenos"])
+
+        if registro.get("alergenos") and "x99" in (registro.get("alergenos") or ""):
+            registro["alergenos"] = ""
+        if registro.get("alergenos"):
+            registro["alergenos"] = deduplicar_alergenos(registro["alergenos"])
+
+        self.repositorio.guardar_producto(registro)
+        self.repositorio.registrar_precio(
+            registro["id"], registro.get("precio_unidad"), registro.get("precio_bulto")
+        )
+        return self.repositorio.obtener_producto(registro["id"]) or registro
+
+    def obtener_producto(
+        self, id_producto: str, *, enriquecer: bool = True, refrescar: bool = False
+    ) -> dict[str, Any]:
+        local = self.repositorio.obtener_producto(id_producto)
+        es_externo = (
             es_id_carrefour(id_producto)
             or es_id_alcampo(id_producto)
             or es_id_froiz(id_producto)
@@ -325,12 +393,11 @@ class ServicioCatalogo:
             or es_id_lidl(id_producto)
             or es_id_dia(id_producto)
             or es_id_gadis(id_producto)
-        ):
-            local = self.repositorio.obtener_producto(id_producto)
+        )
+        if es_externo:
             if local:
                 if enriquecer:
-                    local = fusionar_ficha(local, obtener_ficha_tienda(local))
-                    return self._enriquecer_registro(local)
+                    return self._enriquecer_producto_existente(local)
                 return local
             if es_id_carrefour(id_producto):
                 marca = "Carrefour"
@@ -349,6 +416,11 @@ class ServicioCatalogo:
             raise RuntimeError(
                 f"Producto {marca} no encontrado en local. Vuelve a buscarlo."
             )
+
+        if local and not refrescar:
+            if enriquecer:
+                return self._enriquecer_producto_existente(local)
+            return local
 
         bruto = self.cliente.obtener_producto(id_producto)
         return self._persistir_mercadona(bruto, enriquecer=enriquecer)
@@ -379,24 +451,85 @@ class ServicioCatalogo:
         return None
 
     def alternativas_mas_baratas(
-        self, producto: dict[str, Any], limite: int = 6
+        self,
+        producto: dict[str, Any],
+        limite: int = 6,
+        *,
+        solo_local: bool = False,
     ) -> list[dict[str, Any]]:
         nombre = producto.get("nombre") or producto.get("name") or ""
         tokens = [t for t in nombre.split() if len(t) > 3][:2]
         consulta = " ".join(tokens) if tokens else nombre
         if not consulta:
             return []
-        candidatos = self.buscar(consulta, limite=20)
         precio = producto.get("precio_unidad") or producto.get("unit_price")
+        pid = producto.get("id")
+
+        if solo_local:
+            vistos: set[str] = set()
+            candidatos: list[dict[str, Any]] = []
+            for token in tokens or [consulta]:
+                for c in self.repositorio.buscar_local(token, limite=40):
+                    cid = c.get("id")
+                    if not cid or cid == pid or cid in vistos:
+                        continue
+                    vistos.add(cid)
+                    candidatos.append(c)
+        else:
+            candidatos = self.buscar(consulta, limite=20)
+
         alternativas = []
         for c in candidatos:
-            if c["id"] == producto.get("id"):
+            if c["id"] == pid:
                 continue
             p = c.get("precio_unidad")
+            if p is None:
+                p = c.get("unit_price")
             if precio is not None and p is not None and p < precio:
                 alternativas.append(c)
-        alternativas.sort(key=lambda x: x.get("precio_unidad") or 1e9)
+        alternativas.sort(key=lambda x: x.get("precio_unidad") or x.get("unit_price") or 1e9)
         return alternativas[:limite]
+
+    def actualizar_precios(
+        self, ids_producto: list[str], *, enriquecer: bool = False
+    ) -> dict[str, Any]:
+        """Refresca precios en red y devuelve resumen de cambios."""
+        cambios: list[dict[str, Any]] = []
+        actualizados = 0
+        errores = 0
+        for pid in ids_producto:
+            if not pid:
+                continue
+            try:
+                viejo = self.repositorio.obtener_producto(pid)
+                precio_viejo = None
+                if viejo and viejo.get("precio_unidad") is not None:
+                    precio_viejo = float(viejo["precio_unidad"])
+                nuevo = self.obtener_producto(pid, enriquecer=enriquecer)
+                precio_nuevo = None
+                if nuevo and nuevo.get("precio_unidad") is not None:
+                    precio_nuevo = float(nuevo["precio_unidad"])
+                if (
+                    precio_viejo is not None
+                    and precio_nuevo is not None
+                    and abs(precio_viejo - precio_nuevo) > 0.001
+                ):
+                    cambios.append(
+                        {
+                            "id": pid,
+                            "nombre": nuevo.get("nombre") or nuevo.get("name") or pid,
+                            "precio_anterior": precio_viejo,
+                            "precio_nuevo": precio_nuevo,
+                        }
+                    )
+                actualizados += 1
+            except Exception:  # noqa: BLE001
+                errores += 1
+        return {
+            "actualizados": actualizados,
+            "errores": errores,
+            "cambios": cambios,
+        }
 
     def _persistir_mercadona(
         self, bruto: dict[str, Any], *, enriquecer: bool
@@ -636,27 +769,28 @@ class ServicioCatalogo:
     def _enriquecer_registro(
         self, registro: dict[str, Any], *, persistir: bool = True
     ) -> dict[str, Any]:
-        off = self.off.enriquecer(
-            ean=registro.get("ean"),
-            nombre=registro.get("nombre"),
-            marca=registro.get("marca"),
-        )
-        if off:
-            if off.get("ean") and not registro.get("ean"):
-                registro["ean"] = off["ean"]
-            for clave in (
-                "nutriscore", "energia_kcal", "proteinas", "hidratos", "grasas",
-                "fibra", "azucares", "sal", "nutricion_por",
-            ):
-                if off.get(clave) is not None:
-                    registro[clave] = off[clave]
-            if off.get("ingredientes_off") and not registro.get("ingredientes"):
-                registro["ingredientes"] = off["ingredientes_off"]
-            if off.get("alergenos_off") and (
-                not registro.get("alergenos")
-                or "x99" in (registro.get("alergenos") or "")
-            ):
-                registro["alergenos"] = deduplicar_alergenos(off["alergenos_off"])
+        if self._necesita_off(registro):
+            off = self.off.enriquecer(
+                ean=registro.get("ean"),
+                nombre=registro.get("nombre"),
+                marca=registro.get("marca"),
+            )
+            if off:
+                if off.get("ean") and not registro.get("ean"):
+                    registro["ean"] = off["ean"]
+                for clave in (
+                    "nutriscore", "energia_kcal", "proteinas", "hidratos", "grasas",
+                    "fibra", "azucares", "sal", "nutricion_por",
+                ):
+                    if off.get(clave) is not None:
+                        registro[clave] = off[clave]
+                if off.get("ingredientes_off") and not registro.get("ingredientes"):
+                    registro["ingredientes"] = off["ingredientes_off"]
+                if off.get("alergenos_off") and (
+                    not registro.get("alergenos")
+                    or "x99" in (registro.get("alergenos") or "")
+                ):
+                    registro["alergenos"] = deduplicar_alergenos(off["alergenos_off"])
         if persistir:
             if registro.get("alergenos"):
                 registro["alergenos"] = deduplicar_alergenos(registro["alergenos"])

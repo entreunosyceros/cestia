@@ -122,6 +122,52 @@ QLabel#AvisoFrescor {
     padding: 8px 12px;
     font-weight: 600;
 }
+QLabel#AvisoPresupuesto {
+    color: #fecaca;
+    background: #3d2020;
+    border: 1px solid #6b3030;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: 600;
+}
+QLabel#AvisoSinResultados {
+    color: #fde68a;
+    background: #3d3018;
+    border: 2px solid #a67c00;
+    border-radius: 12px;
+    padding: 20px 24px;
+    font-size: 14px;
+    font-weight: 500;
+    min-height: 72px;
+}
+QLabel#AvisoNutriScore {
+    color: #fde68a;
+    background: #3d3018;
+    border: 2px solid #a67c00;
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-weight: 600;
+}
+QWidget#GraficoNutriScore[sinNutri="true"] {
+    border: 2px solid #a67c00;
+    border-radius: 12px;
+}
+QListWidget#BusquedasRecientes {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+QListWidget#BusquedasRecientes::item {
+    background: #243029;
+    color: #d8f3e4;
+    border-radius: 12px;
+    padding: 4px 10px;
+    margin: 2px 4px 2px 0;
+}
+QListWidget#BusquedasRecientes::item:selected {
+    background: #178a58;
+    color: #ffffff;
+}
 QLabel#Precio { font-size: 20px; font-weight: 800; color: #7dcea0; }
 QLabel#BadgeSube { color: #f87171; font-weight: 700; }
 QLabel#BadgeBaja { color: #4ade80; font-weight: 700; }

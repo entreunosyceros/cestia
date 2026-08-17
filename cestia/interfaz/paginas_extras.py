@@ -7,6 +7,7 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from cestia.interfaz.utilidades import formatear_euros, cargar_miniatura
+from cestia.interfaz.trabajadores import ejecutar_en_hilo
 from cestia.tiendas import nombre_tienda
 
 
@@ -92,9 +94,10 @@ class PaginaFavoritos(QWidget):
 class PaginaListas(QWidget):
     abrir_producto = Signal(str)
 
-    def __init__(self, repositorio, parent=None) -> None:
+    def __init__(self, repositorio, catalogo=None, parent=None) -> None:
         super().__init__(parent)
         self.repositorio = repositorio
+        self.catalogo = catalogo
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Listas de la compra", objectName="TituloPagina"))
         layout.addWidget(
@@ -104,7 +107,8 @@ class PaginaListas(QWidget):
             QLabel(
                 "«Cargar en cesta» lleva los productos de la lista a la cesta. "
                 "«Copiar cesta a esta lista» guarda la cesta actual en la plantilla. "
-                "«Registrar gasto» anota el total de la lista en el registro de gastos.",
+                "«Registrar gasto» anota el total de la lista en el registro de gastos. "
+                "Marca productos como comprados mientras haces la compra.",
                 objectName="Atenuado",
             )
         )
@@ -126,15 +130,19 @@ class PaginaListas(QWidget):
         split.addWidget(izq)
         der = QWidget()
         der_l = QVBoxLayout(der)
-        self.detalle = QTableWidget(0, 4)
+        self.progreso_compra = QLabel("")
+        self.progreso_compra.setObjectName("Atenuado")
+        der_l.addWidget(self.progreso_compra)
+        self.detalle = QTableWidget(0, 5)
         self.detalle.setHorizontalHeaderLabels(
-            ["Producto", "Cant.", "Precio", "Quitar"]
+            ["✓", "Producto", "Cant.", "Precio", "Quitar"]
         )
         cabecera = self.detalle.horizontalHeader()
-        cabecera.setSectionResizeMode(0, QHeaderView.Stretch)
-        cabecera.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        cabecera.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        cabecera.setSectionResizeMode(1, QHeaderView.Stretch)
         cabecera.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         cabecera.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        cabecera.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.detalle.setEditTriggers(QTableWidget.NoEditTriggers)
         self.detalle.setSelectionBehavior(QTableWidget.SelectRows)
         self.detalle.verticalHeader().setVisible(False)
@@ -145,9 +153,19 @@ class PaginaListas(QWidget):
         self.total_lista = QLabel("")
         self.total_lista.setWordWrap(True)
         der_l.addWidget(self.total_lista)
+        self.msg_precios = QLabel("")
+        self.msg_precios.setObjectName("Atenuado")
+        self.msg_precios.setWordWrap(True)
+        der_l.addWidget(self.msg_precios)
         acc = QHBoxLayout()
         cargar = QPushButton("Cargar en cesta")
         cargar.clicked.connect(self._cargar_cesta)
+        precios = QPushButton("Actualizar precios")
+        precios.setProperty("secundario", True)
+        precios.clicked.connect(self._actualizar_precios)
+        reiniciar = QPushButton("Reiniciar marcados")
+        reiniciar.setProperty("secundario", True)
+        reiniciar.clicked.connect(self._reiniciar_comprados)
         guardar = QPushButton("Copiar cesta a esta lista")
         guardar.setProperty("secundario", True)
         guardar.clicked.connect(self._guardar_cesta)
@@ -157,9 +175,11 @@ class PaginaListas(QWidget):
         registrar = QPushButton("Registrar gasto")
         registrar.clicked.connect(self._registrar_gasto)
         acc.addWidget(cargar)
+        acc.addWidget(precios)
         acc.addWidget(guardar)
         acc.addWidget(registrar)
         acc.addWidget(quitar_prod)
+        acc.addWidget(reiniciar)
         acc.addStretch()
         der_l.addLayout(acc)
         split.addWidget(der)
@@ -187,8 +207,10 @@ class PaginaListas(QWidget):
     def _actualizar_total_lista(self, id_lista: int) -> None:
         if not self._items:
             self.total_lista.setText("Lista vacía.")
+            self.progreso_compra.setText("")
             return
         totales = self.repositorio.totales_lista_compra(id_lista)
+        resumen = self.repositorio.resumen_lista_compra(id_lista)
         texto = (
             f"<b>Total estimado: {formatear_euros(totales['coste'])}</b> "
             f"({totales['productos']} productos)"
@@ -200,6 +222,15 @@ class PaginaListas(QWidget):
                 f"no se incluyen en el total.</span>"
             )
         self.total_lista.setText(texto)
+        comprados = resumen.get("comprados", 0)
+        total = resumen.get("total", 0)
+        pendientes = resumen.get("pendientes", 0)
+        if total:
+            self.progreso_compra.setText(
+                f"Comprados: {comprados} de {total} · Pendientes: {pendientes}"
+            )
+        else:
+            self.progreso_compra.setText("")
 
     def _abrir_producto_lista(self, fila: int, _col: int) -> None:
         if 0 <= fila < len(self._items):
@@ -268,9 +299,27 @@ class PaginaListas(QWidget):
         self._items = self.repositorio.items_lista_compra(id_lista)
         self.detalle.setRowCount(len(self._items))
         for i, item in enumerate(self._items):
-            self.detalle.setItem(
-                i, 0, QTableWidgetItem(item.get("nombre") or item.get("name") or "")
+            comprado = bool(int(item.get("comprado") or 0))
+            chk = QCheckBox()
+            chk.setChecked(comprado)
+            chk.stateChanged.connect(
+                lambda estado, lid=id_lista, pid=item["id"], fila=i: (
+                    self.repositorio.lista_marcar_comprado(
+                        lid, pid, estado == int(Qt.CheckState.Checked)
+                    ),
+                    self._actualizar_total_lista(lid),
+                    self._estilo_fila_comprada(fila, estado == int(Qt.CheckState.Checked)),
+                )
             )
+            self.detalle.setCellWidget(i, 0, chk)
+            nombre_item = QTableWidgetItem(
+                item.get("nombre") or item.get("name") or ""
+            )
+            if comprado:
+                font = nombre_item.font()
+                font.setStrikeOut(True)
+                nombre_item.setFont(font)
+            self.detalle.setItem(i, 1, nombre_item)
             qty = QSpinBox()
             qty.setRange(1, 99)
             qty.setValue(max(1, int(round(float(item.get("cantidad") or 1)))))
@@ -280,10 +329,10 @@ class PaginaListas(QWidget):
                     self._mostrar_lista(self.listas.currentRow()),
                 )
             )
-            self.detalle.setCellWidget(i, 1, qty)
+            self.detalle.setCellWidget(i, 2, qty)
             self.detalle.setItem(
                 i,
-                2,
+                3,
                 QTableWidgetItem(
                     formatear_euros(item.get("precio_unidad") or item.get("unit_price"))
                 ),
@@ -295,9 +344,64 @@ class PaginaListas(QWidget):
                     lid, pid
                 )
             )
-            self.detalle.setCellWidget(i, 3, rm)
+            self.detalle.setCellWidget(i, 4, rm)
             self.detalle.setRowHeight(i, 48)
         self._actualizar_total_lista(id_lista)
+
+    def _estilo_fila_comprada(self, fila: int, comprado: bool) -> None:
+        item = self.detalle.item(fila, 1)
+        if not item:
+            return
+        font = item.font()
+        font.setStrikeOut(comprado)
+        item.setFont(font)
+
+    def _reiniciar_comprados(self) -> None:
+        row = self.listas.currentRow()
+        if row < 0:
+            return
+        id_lista = self._listas[row]["id"]
+        self.repositorio.lista_reiniciar_comprados(id_lista)
+        self._mostrar_lista(row)
+
+    def _actualizar_precios(self) -> None:
+        if not self.catalogo:
+            return
+        row = self.listas.currentRow()
+        if row < 0:
+            return
+        id_lista = self._listas[row]["id"]
+        ids = self.repositorio.ids_lista_compra(id_lista)
+        if not ids:
+            QMessageBox.information(self, "Lista", "La lista está vacía.")
+            return
+        self.msg_precios.setText("Actualizando precios…")
+
+        def work():
+            return self.catalogo.actualizar_precios(ids, enriquecer=False)
+
+        def ok(resumen):
+            self._mostrar_lista(row)
+            cambios = resumen.get("cambios") or []
+            if not cambios:
+                self.msg_precios.setText(
+                    f"Precios revisados ({resumen.get('actualizados', 0)} productos). "
+                    "Sin cambios."
+                )
+                return
+            lineas = [
+                f"• {c['nombre']}: {formatear_euros(c['precio_anterior'])} → "
+                f"{formatear_euros(c['precio_nuevo'])}"
+                for c in cambios[:6]
+            ]
+            self.msg_precios.setText(
+                f"{len(cambios)} precio(s) actualizado(s):\n" + "\n".join(lineas)
+            )
+
+        def error(exc):
+            self.msg_precios.setText(f"Error: {exc}")
+
+        ejecutar_en_hilo(work, ok, error)
 
     def _cargar_cesta(self) -> None:
         row = self.listas.currentRow()

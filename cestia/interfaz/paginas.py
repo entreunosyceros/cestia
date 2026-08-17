@@ -15,10 +15,12 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -72,6 +74,8 @@ from cestia.tiendas import (
 
 class PaginaBusqueda(QWidget):
     abrir_producto = Signal(str)
+    favoritos_cambiados = Signal()
+    listas_cambiadas = Signal()
 
     def __init__(self, catalogo, repositorio=None, parent=None) -> None:
         super().__init__(parent)
@@ -95,6 +99,30 @@ class PaginaBusqueda(QWidget):
         row.addWidget(self.query, 1)
         row.addWidget(btn)
         layout.addLayout(row)
+
+        self.fila_recientes = QWidget()
+        recientes_l = QVBoxLayout(self.fila_recientes)
+        recientes_l.setContentsMargins(0, 0, 0, 0)
+        recientes_l.setSpacing(4)
+        cab_recientes = QHBoxLayout()
+        etiqueta_recientes = QLabel("Búsquedas recientes")
+        etiqueta_recientes.setObjectName("Atenuado")
+        self.btn_limpiar_recientes = QPushButton("Limpiar historial")
+        self.btn_limpiar_recientes.setProperty("secundario", True)
+        self.btn_limpiar_recientes.clicked.connect(self._limpiar_recientes)
+        cab_recientes.addWidget(etiqueta_recientes)
+        cab_recientes.addStretch()
+        cab_recientes.addWidget(self.btn_limpiar_recientes)
+        recientes_l.addLayout(cab_recientes)
+        self.recientes = QListWidget()
+        self.recientes.setObjectName("BusquedasRecientes")
+        self.recientes.setMaximumHeight(72)
+        self.recientes.setFlow(QListWidget.LeftToRight)
+        self.recientes.setWrapping(True)
+        self.recientes.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.recientes.itemClicked.connect(self._buscar_reciente)
+        recientes_l.addWidget(self.recientes)
+        layout.addWidget(self.fila_recientes)
 
         filtros = QHBoxLayout()
         self.filtro_tienda = QComboBox()
@@ -159,6 +187,13 @@ class PaginaBusqueda(QWidget):
         self.aviso_precios.setObjectName("AvisoFrescor")
         self.aviso_precios.setWordWrap(True)
         layout.addWidget(self.aviso_precios)
+        self.aviso_sin_resultados = QLabel("")
+        self.aviso_sin_resultados.setObjectName("AvisoSinResultados")
+        self.aviso_sin_resultados.setWordWrap(True)
+        self.aviso_sin_resultados.setAlignment(Qt.AlignCenter)
+        self.aviso_sin_resultados.setTextFormat(Qt.TextFormat.RichText)
+        self.aviso_sin_resultados.hide()
+        layout.addWidget(self.aviso_sin_resultados)
         self.progreso = crear_barra_progreso()
         layout.addWidget(self.progreso)
 
@@ -186,6 +221,8 @@ class PaginaBusqueda(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setCornerButtonEnabled(False)
         self.table.cellDoubleClicked.connect(self._open_row)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._menu_contextual)
         layout.addWidget(self.table, 1)
 
     def enfocar_busqueda(self) -> None:
@@ -218,13 +255,49 @@ class PaginaBusqueda(QWidget):
             self.subtitulo.setText(
                 "Ninguna tienda activa. Actívalas en Configuración."
             )
+        self._mostrar_recientes()
+
+    def _mostrar_recientes(self) -> None:
+        self.recientes.clear()
+        if not self.repositorio:
+            return
+        for consulta in self.repositorio.listar_busquedas_recientes(12):
+            item = QListWidgetItem(consulta)
+            item.setToolTip(f"Buscar «{consulta}»")
+            self.recientes.addItem(item)
+        self.fila_recientes.setVisible(bool(self.recientes.count()))
+
+    def _limpiar_recientes(self) -> None:
+        if not self.repositorio:
+            return
+        if not self.repositorio.listar_busquedas_recientes(1):
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Limpiar historial",
+                "¿Eliminar todas las búsquedas recientes?",
+            )
+            != QMessageBox.Yes
+        ):
+            return
+        self.repositorio.limpiar_busquedas_recientes()
+        self._mostrar_recientes()
+
+    def _buscar_reciente(self, item: QListWidgetItem) -> None:
+        self.query.setText(item.text())
+        self.buscar()
 
     def buscar(self) -> None:
         q = self.query.text().strip()
         if not q:
             return
+        if self.repositorio:
+            self.repositorio.anadir_busqueda_reciente(q)
+            self._mostrar_recientes()
         self.status.setText("Buscando…")
         self.aviso_precios.setText("")
+        self.aviso_sin_resultados.hide()
         self.table.setRowCount(0)
         mostrar_progreso(self.progreso, True)
 
@@ -239,6 +312,7 @@ class PaginaBusqueda(QWidget):
         def error(e):
             mostrar_progreso(self.progreso, False)
             self.aviso_precios.setText("")
+            self.aviso_sin_resultados.hide()
             self.status.setText(f"Error: {e}")
 
         ejecutar_en_hilo(work, ok, error)
@@ -276,19 +350,31 @@ class PaginaBusqueda(QWidget):
         self._results = results
         consulta = self.query.text().strip()
         if not results:
+            self.status.setText("")
+            self.aviso_precios.setText("")
+            self.aviso_sin_resultados.show()
             if consulta:
-                self.status.setText(f"Sin resultados para esa búsqueda («{consulta}»).")
+                titulo = f"Sin resultados para «{consulta}»"
             else:
-                self.status.setText("Sin resultados para esa búsqueda.")
+                titulo = "Sin resultados para esa búsqueda"
             if getattr(self, "_raw_results", None):
-                self.aviso_precios.setText(
-                    "Hay productos en la búsqueda, pero ninguno cumple los filtros activos."
+                detalle = (
+                    "Hay productos en la búsqueda, pero ninguno cumple "
+                    "los filtros activos. Prueba a quitar filtros o ampliar el rango de precio."
                 )
             else:
-                self.aviso_precios.setText("")
+                detalle = (
+                    "No se encontraron coincidencias en las tiendas activas. "
+                    "Prueba otro término o revisa la configuración de tiendas."
+                )
+            self.aviso_sin_resultados.setText(
+                f"<p style='font-size:17px; font-weight:800; margin:0 0 8px 0;'>{titulo}</p>"
+                f"<p style='margin:0;'>{detalle}</p>"
+            )
             self.table.setRowCount(0)
             return
 
+        self.aviso_sin_resultados.hide()
         self.status.setText(f"{len(results)} resultados")
         frescor = resumen_frescor(results)
         if frescor:
@@ -373,6 +459,75 @@ class PaginaBusqueda(QWidget):
         if 0 <= row < len(self._results):
             self.abrir_producto.emit(self._results[row]["id"])
 
+    def _producto_en_fila(self, fila: int) -> dict[str, Any] | None:
+        if 0 <= fila < len(self._results):
+            return self._results[fila]
+        return None
+
+    def _nombre_producto(self, producto: dict[str, Any]) -> str:
+        return producto.get("nombre") or producto.get("name") or producto.get("id") or ""
+
+    def _menu_contextual(self, pos) -> None:
+        fila = self.table.rowAt(pos.y())
+        producto = self._producto_en_fila(fila)
+        if not producto or not self.repositorio:
+            return
+
+        pid = producto["id"]
+        nombre = self._nombre_producto(producto)
+        menu = QMenu(self)
+        abrir = menu.addAction("Abrir ficha")
+        menu.addSeparator()
+
+        if self.repositorio.es_favorito(pid):
+            acc_fav = menu.addAction("Quitar de favoritos")
+        else:
+            acc_fav = menu.addAction("Añadir a favoritos")
+
+        submenu_lista = menu.addMenu("Añadir a lista de la compra")
+        acciones_lista: list = []
+        for lista in self.repositorio.listar_listas_compra():
+            acc = submenu_lista.addAction(lista["nombre"])
+            acc.setData(int(lista["id"]))
+            acciones_lista.append(acc)
+        if acciones_lista:
+            submenu_lista.addSeparator()
+        acc_nueva_lista = submenu_lista.addAction("Nueva lista…")
+
+        elegida = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if elegida is None:
+            return
+        if elegida == abrir:
+            self.abrir_producto.emit(pid)
+        elif elegida == acc_fav:
+            if self.repositorio.es_favorito(pid):
+                self.repositorio.favorito_quitar(pid)
+                self.status.setText(f"«{nombre}» quitado de favoritos.")
+            else:
+                self.repositorio.favorito_anadir(pid)
+                self.status.setText(f"«{nombre}» añadido a favoritos.")
+            self.favoritos_cambiados.emit()
+        elif elegida == acc_nueva_lista:
+            titulo_lista, ok = QInputDialog.getText(
+                self, "Lista de la compra", "Nombre de la nueva lista:"
+            )
+            if not ok or not titulo_lista.strip():
+                return
+            id_lista = self.repositorio.crear_lista_compra(titulo_lista.strip())
+            self.repositorio.lista_anadir_producto(id_lista, pid, 1)
+            self.status.setText(
+                f"«{nombre}» añadido a la lista «{titulo_lista.strip()}»."
+            )
+            self.listas_cambiadas.emit()
+        elif elegida in acciones_lista:
+            id_lista = elegida.data()
+            if id_lista is not None:
+                self.repositorio.lista_anadir_producto(int(id_lista), pid, 1)
+                self.status.setText(
+                    f"«{nombre}» añadido a «{elegida.text()}»."
+                )
+                self.listas_cambiadas.emit()
+
     @staticmethod
     def _nombre_supermercado(producto: dict[str, Any]) -> str:
         return nombre_tienda(producto.get("tienda"), producto.get("id"))
@@ -390,6 +545,7 @@ class PaginaProducto(QWidget):
         self.catalogo = catalogo
         self.repositorio = repositorio
         self.product: dict[str, Any] | None = None
+        self._id_carga: str | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -545,25 +701,67 @@ class PaginaProducto(QWidget):
         ficha.addLayout(body)
 
     def cargar(self, id_producto: str) -> None:
+        self._id_carga = id_producto
         self.title.setText("Cargando…")
         mostrar_progreso(self.progreso, True)
+
+        local = self.catalogo.obtener_producto_local(id_producto)
+        if local:
+            history = self.repositorio.historial_precios(id_producto)
+            compare = self.repositorio.comparar_precio(id_producto, dias_atras=180)
+            alts = self.catalogo.alternativas_mas_baratas(
+                local, solo_local=True
+            )
+            self._show((local, compare, alts, history))
 
         def work():
             product = self.catalogo.obtener_producto(id_producto, enriquecer=True)
             compare = self.repositorio.comparar_precio(id_producto, dias_atras=180)
-            alts = self.catalogo.alternativas_mas_baratas(product)
+            alts = self.catalogo.alternativas_mas_baratas(product, solo_local=True)
             history = self.repositorio.historial_precios(id_producto)
             return product, compare, alts, history
 
         def ok(payload):
+            if self._id_carga != id_producto:
+                return
             mostrar_progreso(self.progreso, False)
             self._show(payload)
 
         def error(e):
+            if self._id_carga != id_producto:
+                return
             mostrar_progreso(self.progreso, False)
-            self.title.setText(f"Error: {e}")
+            if local:
+                self.compare.setText(
+                    f"No se pudieron actualizar todos los datos: {e}"
+                )
+            else:
+                self.title.setText(f"Error: {e}")
 
         ejecutar_en_hilo(work, ok, error)
+
+    def _mostrar_alternativas(self, alts: list[dict[str, Any]]) -> None:
+        self.alts.clear()
+        if not alts:
+            vacio = QListWidgetItem(
+                "No hay alternativas más baratas entre los productos "
+                "que ya has buscado. Prueba una búsqueda multi-tienda."
+            )
+            vacio.setFlags(Qt.NoItemFlags)
+            self.alts.addItem(vacio)
+        else:
+            for a in alts:
+                precio = formatear_euros(
+                    a.get("precio_unidad")
+                    if a.get("precio_unidad") is not None
+                    else a.get("unit_price")
+                )
+                nombre = a.get("nombre") or a.get("name") or a.get("id")
+                tienda = PaginaBusqueda._nombre_supermercado(a)
+                item = QListWidgetItem(f"{precio} — {nombre} · {tienda}")
+                item.setData(Qt.UserRole, a.get("id"))
+                item.setToolTip("Abrir ficha del producto")
+                self.alts.addItem(item)
 
     def _show(self, payload) -> None:
         product, compare, alts, history = payload
@@ -641,24 +839,7 @@ class PaginaProducto(QWidget):
         )
         self._mostrar_nutricion(product)
 
-        self.alts.clear()
-        if not alts:
-            vacio = QListWidgetItem("No hay alternativas más baratas guardadas")
-            vacio.setFlags(Qt.NoItemFlags)
-            self.alts.addItem(vacio)
-        else:
-            for a in alts:
-                precio = formatear_euros(
-                    a.get("precio_unidad")
-                    if a.get("precio_unidad") is not None
-                    else a.get("unit_price")
-                )
-                nombre = a.get("nombre") or a.get("name") or a.get("id")
-                tienda = PaginaBusqueda._nombre_supermercado(a)
-                item = QListWidgetItem(f"{precio} — {nombre} · {tienda}")
-                item.setData(Qt.UserRole, a.get("id"))
-                item.setToolTip("Abrir ficha del producto")
-                self.alts.addItem(item)
+        self._mostrar_alternativas(alts)
 
     def _mostrar_alergenos(self, texto: str | None) -> None:
         from cestia.enriquecimiento import deduplicar_alergenos
@@ -764,6 +945,7 @@ class PaginaCesta(QWidget):
         super().__init__(parent)
         self.repositorio = repositorio
         self.catalogo = catalogo
+        self._ultima_mezclada: dict[str, Any] | None = None
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Cesta de la compra", objectName="TituloPagina"))
 
@@ -788,12 +970,23 @@ class PaginaCesta(QWidget):
         self.optima.setObjectName("Atenuado")
         layout.addWidget(self.optima)
 
+        self.msg_precios = QLabel("")
+        self.msg_precios.setObjectName("Atenuado")
+        self.msg_precios.setWordWrap(True)
+        layout.addWidget(self.msg_precios)
+
         row = QHBoxLayout()
         save = QPushButton("Registrar gasto")
         save.clicked.connect(self.guardar_compra)
         calc = QPushButton("Calcular óptima")
         calc.setProperty("secundario", True)
         calc.clicked.connect(self._calcular_optima)
+        aplicar = QPushButton("Aplicar óptima")
+        aplicar.setProperty("secundario", True)
+        aplicar.clicked.connect(self._aplicar_optima)
+        precios = QPushButton("Actualizar precios")
+        precios.setProperty("secundario", True)
+        precios.clicked.connect(self._actualizar_precios)
         clear = QPushButton("Vaciar")
         clear.setProperty("secundario", True)
         clear.clicked.connect(self.vaciar)
@@ -802,6 +995,8 @@ class PaginaCesta(QWidget):
         refresh.clicked.connect(self.actualizar)
         row.addWidget(save)
         row.addWidget(calc)
+        row.addWidget(aplicar)
+        row.addWidget(precios)
         row.addWidget(clear)
         row.addWidget(refresh)
         row.addStretch()
@@ -846,10 +1041,13 @@ class PaginaCesta(QWidget):
     def _mostrar_presupuesto(self, total_cesta: float) -> None:
         res = self.repositorio.resumen_presupuesto()
         partes = []
+        excedido = False
         if res.get("presupuesto_semanal") is not None:
             rest = res.get("restante_semana")
             if rest is not None:
                 rest -= total_cesta
+                if rest < 0:
+                    excedido = True
             partes.append(
                 f"Presupuesto semanal: {formatear_euros(res['presupuesto_semanal'])} · "
                 f"gastado {formatear_euros(res['gasto_semana'])} · "
@@ -859,48 +1057,152 @@ class PaginaCesta(QWidget):
             rest_m = res.get("restante_mes")
             if rest_m is not None:
                 rest_m -= total_cesta
+                if rest_m < 0:
+                    excedido = True
             partes.append(
                 f"Presupuesto mensual: {formatear_euros(res['presupuesto_mensual'])} · "
                 f"gastado {formatear_euros(res['gasto_mes'])} · "
                 f"restante ~{formatear_euros(rest_m if rest_m is not None else 0)}"
             )
-        self.presupuesto.setText(" · ".join(partes) if partes else "")
+        texto = " · ".join(partes) if partes else ""
+        if excedido and texto:
+            texto = f"<b>⚠ Presupuesto superado con la cesta actual.</b><br>{texto}"
+        self.presupuesto.setText(texto)
+        self.presupuesto.setObjectName("AvisoPresupuesto" if excedido else "")
+        self.presupuesto.style().unpolish(self.presupuesto)
+        self.presupuesto.style().polish(self.presupuesto)
 
     def _calcular_optima(self) -> None:
         items = self.repositorio.items_cesta()
         if not items:
             self.optima.setText("La cesta está vacía.")
+            self._ultima_mezclada = None
             return
-        alternativas: dict[str, list] = {}
-        if self.catalogo:
+        if not self.catalogo:
+            self.optima.setText("No hay catálogo disponible para calcular alternativas.")
+            return
+        self.optima.setText("Calculando cesta óptima…")
+        self.msg_precios.setText("")
+
+        def work():
+            alternativas: dict[str, list] = {}
             for item in items:
                 try:
                     alts = self.catalogo.alternativas_mas_baratas(item, limite=8)
                     alternativas[item["id"]] = alts
                 except Exception:  # noqa: BLE001
                     pass
-        por_tienda = calcular_cesta_por_tienda(items, alternativas)
-        mezclada = calcular_cesta_optima_mezclada(items, alternativas)
-        lineas = ["<b>Cesta óptima multi-tienda</b>"]
-        if por_tienda.get("mejor_tienda"):
-            m = por_tienda["mejor_tienda"]
+            por_tienda = calcular_cesta_por_tienda(items, alternativas)
+            mezclada = calcular_cesta_optima_mezclada(items, alternativas)
+            return por_tienda, mezclada
+
+        def ok(resultado):
+            por_tienda, mezclada = resultado
+            self._ultima_mezclada = mezclada
+            lineas = ["<b>Cesta óptima multi-tienda</b>"]
+            if por_tienda.get("mejor_tienda"):
+                m = por_tienda["mejor_tienda"]
+                lineas.append(
+                    f"Una sola tienda: {nombre_tienda(m['tienda'])} → "
+                    f"{formatear_euros(m['total'])} "
+                    f"({m['productos_cubiertos']}/{m['productos_total']} productos)"
+                )
             lineas.append(
-                f"Una sola tienda: {nombre_tienda(m['tienda'])} → "
-                f"{formatear_euros(m['total'])} "
-                f"({m['productos_cubiertos']}/{m['productos_total']} productos)"
+                f"Mezclando tiendas: {formatear_euros(mezclada['total'])}"
             )
-        lineas.append(
-            f"Mezclando tiendas: {formatear_euros(mezclada['total'])}"
-        )
-        for tienda, sub in sorted(
-            mezclada.get("tiendas_usadas", {}).items(), key=lambda x: -x[1]
-        ):
-            lineas.append(f"  · {nombre_tienda(tienda)}: {formatear_euros(sub)}")
-        if por_tienda.get("ahorro_vs_peor"):
-            lineas.append(
-                f"Ahorro vs tienda más cara: {formatear_euros(por_tienda['ahorro_vs_peor'])}"
+            for tienda, sub in sorted(
+                mezclada.get("tiendas_usadas", {}).items(), key=lambda x: -x[1]
+            ):
+                lineas.append(f"  · {nombre_tienda(tienda)}: {formatear_euros(sub)}")
+            sustituibles = sum(
+                1
+                for ln in mezclada.get("lineas", [])
+                if ln.get("id_sugerido") and ln.get("id_sugerido") != ln.get("id_producto")
             )
-        self.optima.setText("<br>".join(lineas))
+            if sustituibles:
+                lineas.append(
+                    f"Puedes aplicar {sustituibles} sustitución(es) más barata(s) "
+                    f"con «Aplicar óptima»."
+                )
+            if por_tienda.get("ahorro_vs_peor"):
+                lineas.append(
+                    f"Ahorro vs tienda más cara: "
+                    f"{formatear_euros(por_tienda['ahorro_vs_peor'])}"
+                )
+            self.optima.setText("<br>".join(lineas))
+
+        def error(exc):
+            self.optima.setText(f"Error al calcular: {exc}")
+
+        ejecutar_en_hilo(work, ok, error)
+
+    def _aplicar_optima(self) -> None:
+        if not self._ultima_mezclada:
+            QMessageBox.information(
+                self,
+                "Cesta",
+                "Calcula primero la cesta óptima con «Calcular óptima».",
+            )
+            return
+        cambios = 0
+        for linea in self._ultima_mezclada.get("lineas", []):
+            id_viejo = linea.get("id_producto")
+            id_nuevo = linea.get("id_sugerido") or id_viejo
+            cantidad = float(linea.get("cantidad") or 1)
+            if id_viejo and id_nuevo and id_nuevo != id_viejo:
+                self.repositorio.cesta_sustituir(id_viejo, id_nuevo, cantidad)
+                cambios += 1
+        if cambios == 0:
+            QMessageBox.information(
+                self,
+                "Cesta",
+                "La cesta ya tiene los productos más baratos disponibles.",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Cesta",
+                f"{cambios} producto(s) sustituido(s) por alternativas más baratas.",
+            )
+        self.actualizar()
+
+    def _actualizar_precios(self) -> None:
+        if not self.catalogo:
+            return
+        ids = self.repositorio.ids_cesta()
+        if not ids:
+            QMessageBox.information(self, "Cesta", "La cesta está vacía.")
+            return
+        self.msg_precios.setText("Actualizando precios…")
+
+        def work():
+            return self.catalogo.actualizar_precios(ids, enriquecer=False)
+
+        def ok(resumen):
+            self.actualizar()
+            cambios = resumen.get("cambios") or []
+            if not cambios:
+                self.msg_precios.setText(
+                    f"Precios revisados ({resumen.get('actualizados', 0)} productos). "
+                    "Sin cambios respecto a los guardados."
+                )
+                return
+            lineas = [
+                f"• {c['nombre']}: {formatear_euros(c['precio_anterior'])} → "
+                f"{formatear_euros(c['precio_nuevo'])}"
+                for c in cambios[:8]
+            ]
+            extra = ""
+            if len(cambios) > 8:
+                extra = f"\n… y {len(cambios) - 8} más."
+            self.msg_precios.setText(
+                f"{len(cambios)} precio(s) actualizado(s):\n" + "\n".join(lineas) + extra
+            )
+
+        def error(exc):
+            self.msg_precios.setText(f"Error al actualizar precios: {exc}")
+
+        ejecutar_en_hilo(work, ok, error)
 
     def guardar_compra(self) -> None:
         pid = self.repositorio.guardar_compra()
@@ -920,6 +1222,8 @@ class PaginaCesta(QWidget):
 
 
 class PaginaRegistroGasto(QWidget):
+    repetir_compra = Signal(int)
+
     def __init__(self, repositorio, parent=None) -> None:
         super().__init__(parent)
         self.repositorio = repositorio
@@ -928,7 +1232,8 @@ class PaginaRegistroGasto(QWidget):
         layout.addWidget(
             QLabel(
                 "Anota lo que gastaste al terminar una compra real "
-                "(desde la cesta o desde una lista).",
+                "(desde la cesta o desde una lista). "
+                "«Repetir compra» carga los productos del gasto en la cesta.",
                 objectName="Atenuado",
             )
         )
@@ -949,12 +1254,15 @@ class PaginaRegistroGasto(QWidget):
         btns = QHBoxLayout()
         dup = QPushButton("Duplicar gasto")
         dup.clicked.connect(self._duplicar)
+        repetir = QPushButton("Repetir compra")
+        repetir.clicked.connect(self._repetir)
         eliminar = QPushButton("Eliminar gasto")
         eliminar.setProperty("secundario", True)
         eliminar.clicked.connect(self._eliminar)
         btn = QPushButton("Actualizar")
         btn.setProperty("secundario", True)
         btn.clicked.connect(self.actualizar)
+        btns.addWidget(repetir)
         btns.addWidget(dup)
         btns.addWidget(eliminar)
         btns.addWidget(btn)
@@ -998,6 +1306,15 @@ class PaginaRegistroGasto(QWidget):
             "Gasto duplicado",
             f"Se ha creado el gasto #{nuevo_id} como copia del #{pid}.",
         )
+
+    def _repetir(self) -> None:
+        gasto = self._gasto_seleccionado()
+        if gasto is None:
+            QMessageBox.information(
+                self, "Registro de gasto", "Selecciona un gasto registrado."
+            )
+            return
+        self.repetir_compra.emit(int(gasto["id"]))
 
     def _eliminar(self) -> None:
         gasto = self._gasto_seleccionado()
@@ -1646,6 +1963,7 @@ class PaginaConfiguracion(QWidget):
     """Ajustes locales: clave Gemini, modelo, tiendas, presupuesto y tema."""
 
     tema_cambiado = Signal(str)
+    ajustes_guardados = Signal()
 
     def __init__(self, asistente, repositorio, parent=None) -> None:
         super().__init__(parent)
@@ -1741,6 +2059,26 @@ class PaginaConfiguracion(QWidget):
         pres_row.addStretch()
         layout.addLayout(pres_row)
 
+        layout.addWidget(QLabel("Alertas de precio"))
+        alert_row = QHBoxLayout()
+        self.check_alertas_auto = QCheckBox("Comprobar alertas automáticamente")
+        self.check_alertas_auto.setChecked(True)
+        self.intervalo_alertas = QSpinBox()
+        self.intervalo_alertas.setPrefix("Cada ")
+        self.intervalo_alertas.setSuffix(" h")
+        self.intervalo_alertas.setRange(1, 168)
+        self.intervalo_alertas.setValue(6)
+        alert_row.addWidget(self.check_alertas_auto)
+        alert_row.addWidget(self.intervalo_alertas)
+        alert_row.addStretch()
+        layout.addLayout(alert_row)
+        layout.addWidget(
+            QLabel(
+                "Las alertas se revisan en segundo plano y avisan en la bandeja del sistema.",
+                objectName="Atenuado",
+            )
+        )
+
         layout.addWidget(QLabel("Apariencia"))
         self.combo_tema = QComboBox()
         self.combo_tema.addItem("Tema claro", "claro")
@@ -1821,6 +2159,12 @@ class PaginaConfiguracion(QWidget):
         pm = self.repositorio.obtener_presupuesto_mensual()
         self.presupuesto_sem.setValue(ps if ps is not None else 0)
         self.presupuesto_mes.setValue(pm if pm is not None else 0)
+        self.check_alertas_auto.setChecked(
+            self.repositorio.alertas_automaticas_activas()
+        )
+        self.intervalo_alertas.setValue(
+            int(self.repositorio.intervalo_alertas_horas())
+        )
         tema = self.repositorio.obtener_ajuste(CLAVE_TEMA, "claro")
         tidx = self.combo_tema.findData(tema)
         if tidx >= 0:
@@ -1883,6 +2227,10 @@ class PaginaConfiguracion(QWidget):
             semanal=ps,
             mensual=pm,
         )
+        self.repositorio.guardar_alertas_automaticas(
+            activas=self.check_alertas_auto.isChecked(),
+            intervalo_horas=float(self.intervalo_alertas.value()),
+        )
         tema = self.combo_tema.currentData() or "claro"
         self.repositorio.guardar_ajuste(CLAVE_TEMA, tema)
         self.tema_cambiado.emit(str(tema))
@@ -1909,6 +2257,7 @@ class PaginaConfiguracion(QWidget):
         mensaje = " ".join(partes)
         QMessageBox.information(self, "Configuración", mensaje)
         self.estado.setText(mensaje)
+        self.ajustes_guardados.emit()
 
     def probar(self) -> None:
         # Guardar primero lo que hay en pantalla para probar esa clave

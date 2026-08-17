@@ -165,4 +165,12 @@ def _migrar_esquema(conexion: sqlite3.Connection) -> None:
         );
         """
     )
+    columnas_lista = {
+        fila[1]
+        for fila in conexion.execute("PRAGMA table_info(listas_items)").fetchall()
+    }
+    if "comprado" not in columnas_lista:
+        conexion.execute(
+            "ALTER TABLE listas_items ADD COLUMN comprado INTEGER NOT NULL DEFAULT 0"
+        )
     conexion.commit()

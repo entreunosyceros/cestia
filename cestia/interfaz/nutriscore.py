@@ -62,7 +62,7 @@ class GraficoNutriScore(QWidget):
         self._tema = "claro"
         self.setObjectName("GraficoNutriScore")
         self.setMinimumHeight(148)
-        self.setMaximumHeight(168)
+        self.setMaximumHeight(220)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QVBoxLayout(self)
@@ -72,6 +72,13 @@ class GraficoNutriScore(QWidget):
 
         self._titulo = QLabel("Nutri-Score")
         layout.addWidget(self._titulo)
+
+        self._aviso_nd = QLabel("")
+        self._aviso_nd.setObjectName("AvisoNutriScore")
+        self._aviso_nd.setWordWrap(True)
+        self._aviso_nd.setTextFormat(Qt.TextFormat.RichText)
+        self._aviso_nd.hide()
+        layout.addWidget(self._aviso_nd)
 
         self._lienzo = _EscalaNutriScore(self)
         layout.addWidget(self._lienzo)
@@ -132,6 +139,9 @@ class GraficoNutriScore(QWidget):
             self.establecer_no_disponible()
             return
         self._grado = g
+        self._aviso_nd.hide()
+        self._resumen.show()
+        self.setProperty("sinNutri", False)
         self._lienzo.establecer_grado(g)
         self._refrescar_etiquetas()
         colores = _TEMAS[self._tema]
@@ -141,6 +151,8 @@ class GraficoNutriScore(QWidget):
             "(de A mejor a E peor)."
         )
         self.show()
+        self.style().unpolish(self)
+        self.style().polish(self)
         self.update()
 
     def establecer_no_disponible(
@@ -151,15 +163,20 @@ class GraficoNutriScore(QWidget):
         self._grado = None
         self._lienzo.establecer_grado(None)
         self._refrescar_etiquetas()
-        colores = _TEMAS[self._tema]
-        texto = mensaje or (
-            "Nutri-Score no disponible: no consta en la ficha de la tienda "
-            "ni en Open Food Facts."
+        detalle = mensaje or (
+            "No consta en la ficha de la tienda ni en Open Food Facts."
         )
-        self._resumen.setText(
-            f"<span style='color:{colores['resumen']}'>{texto}</span>"
+        self._aviso_nd.setText(
+            "<p style='font-size:16px; font-weight:800; margin:0 0 6px 0;'>"
+            "Nutri-Score no disponible</p>"
+            f"<p style='margin:0; font-size:13px; font-weight:500;'>{detalle}</p>"
         )
+        self._aviso_nd.show()
+        self._resumen.hide()
+        self.setProperty("sinNutri", True)
         self.show()
+        self.style().unpolish(self)
+        self.style().polish(self)
         self.update()
 
     def _refrescar_etiquetas(self) -> None:

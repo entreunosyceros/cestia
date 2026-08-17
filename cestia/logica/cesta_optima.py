@@ -102,9 +102,11 @@ def calcular_cesta_optima_mezclada(
         total += sub
         tienda = (mejor.get("tienda") or "mercadona").lower()
         tiendas_usadas[tienda] = tiendas_usadas.get(tienda, 0.0) + sub
+        id_mejor = mejor.get("id") or pid
         lineas.append(
             {
                 "id_producto": pid,
+                "id_sugerido": id_mejor,
                 "nombre": mejor.get("nombre") or mejor.get("name"),
                 "tienda": tienda,
                 "precio_unidad": _precio(mejor),

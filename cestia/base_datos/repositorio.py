@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -238,6 +239,29 @@ class Repositorio:
     def cesta_vaciar(self) -> None:
         self.conexion.execute("DELETE FROM cesta")
         self.conexion.commit()
+
+    def cesta_sustituir(
+        self, id_viejo: str, id_nuevo: str, cantidad: float
+    ) -> None:
+        if id_viejo == id_nuevo:
+            return
+        self.cesta_quitar(id_viejo)
+        self.cesta_anadir(id_nuevo, cantidad)
+
+    def cargar_gasto_en_cesta(self, id_compra: int, *, vaciar: bool = False) -> int:
+        lineas = self.lineas_de_compra(id_compra)
+        if not lineas:
+            return 0
+        if vaciar:
+            self.cesta_vaciar()
+        n = 0
+        for linea in lineas:
+            pid = linea.get("id_producto")
+            if not pid:
+                continue
+            self.cesta_anadir(pid, float(linea["cantidad"]))
+            n += 1
+        return n
 
     def totales_cesta(self) -> dict[str, float]:
         items = self.items_cesta()
@@ -601,7 +625,7 @@ class Repositorio:
     def items_lista_compra(self, id_lista: int) -> list[dict[str, Any]]:
         filas = self.conexion.execute(
             """
-            SELECT i.cantidad, p.*
+            SELECT i.cantidad, i.comprado, p.*
             FROM listas_items i
             JOIN productos p ON p.id = i.id_producto
             WHERE i.id_lista = ?
@@ -610,6 +634,44 @@ class Repositorio:
             (id_lista,),
         ).fetchall()
         return [self._con_alias(dict(f)) for f in filas]
+
+    def lista_marcar_comprado(
+        self, id_lista: int, id_producto: str, comprado: bool
+    ) -> None:
+        self.conexion.execute(
+            """
+            UPDATE listas_items SET comprado = ?
+            WHERE id_lista = ? AND id_producto = ?
+            """,
+            (1 if comprado else 0, id_lista, id_producto),
+        )
+        self.conexion.commit()
+
+    def lista_reiniciar_comprados(self, id_lista: int) -> None:
+        self.conexion.execute(
+            "UPDATE listas_items SET comprado = 0 WHERE id_lista = ?",
+            (id_lista,),
+        )
+        self.conexion.commit()
+
+    def resumen_lista_compra(self, id_lista: int) -> dict[str, int]:
+        fila = self.conexion.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN comprado = 1 THEN 1 ELSE 0 END), 0) AS comprados
+            FROM listas_items
+            WHERE id_lista = ?
+            """,
+            (id_lista,),
+        ).fetchone()
+        total = int(fila["total"] or 0)
+        comprados = int(fila["comprados"] or 0)
+        return {
+            "total": total,
+            "comprados": comprados,
+            "pendientes": max(0, total - comprados),
+        }
 
     def totales_lista_compra(self, id_lista: int) -> dict[str, float | int]:
         items = self.items_lista_compra(id_lista)
@@ -845,6 +907,95 @@ class Repositorio:
             (clave, valor),
         )
         self.conexion.commit()
+
+    # --- Búsquedas recientes y alertas automáticas ---
+
+    CLAVE_BUSQUEDAS = "busquedas_recientes"
+    CLAVE_ALERTAS_AUTO = "alertas_automaticas"
+    CLAVE_INTERVALO_ALERTAS = "intervalo_alertas_horas"
+    MAX_BUSQUEDAS = 20
+
+    def anadir_busqueda_reciente(self, consulta: str) -> None:
+        q = consulta.strip()
+        if not q:
+            return
+        raw = self.obtener_ajuste(self.CLAVE_BUSQUEDAS, "[]")
+        try:
+            lista: list[str] = json.loads(raw)
+        except json.JSONDecodeError:
+            lista = []
+        lista = [x for x in lista if x.lower() != q.lower()]
+        lista.insert(0, q)
+        self.guardar_ajuste(
+            self.CLAVE_BUSQUEDAS,
+            json.dumps(lista[: self.MAX_BUSQUEDAS], ensure_ascii=False),
+        )
+
+    def listar_busquedas_recientes(self, limite: int = 10) -> list[str]:
+        raw = self.obtener_ajuste(self.CLAVE_BUSQUEDAS, "[]")
+        try:
+            lista: list[str] = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return lista[:limite]
+
+    def limpiar_busquedas_recientes(self) -> None:
+        self.guardar_ajuste(self.CLAVE_BUSQUEDAS, "[]")
+
+    def alertas_automaticas_activas(self) -> bool:
+        valor = self.obtener_ajuste(self.CLAVE_ALERTAS_AUTO, "1")
+        return valor.strip() not in {"0", "false", "False", "no", "off"}
+
+    def intervalo_alertas_horas(self) -> float:
+        valor = self.obtener_ajuste(self.CLAVE_INTERVALO_ALERTAS, "6")
+        try:
+            horas = float(valor)
+        except ValueError:
+            horas = 6.0
+        return max(1.0, min(horas, 168.0))
+
+    def guardar_alertas_automaticas(
+        self, *, activas: bool, intervalo_horas: float
+    ) -> None:
+        self.guardar_ajuste(self.CLAVE_ALERTAS_AUTO, "1" if activas else "0")
+        self.guardar_ajuste(
+            self.CLAVE_INTERVALO_ALERTAS, str(max(1.0, min(intervalo_horas, 168.0)))
+        )
+
+    def ids_productos_seguimiento(self, limite: int = 40) -> list[str]:
+        """IDs de favoritos, alertas activas, cesta y listas (para precarga)."""
+        filas = self.conexion.execute(
+            """
+            SELECT id_producto FROM favoritos
+            UNION
+            SELECT id_producto FROM alertas WHERE activa = 1
+            UNION
+            SELECT id_producto FROM cesta
+            UNION
+            SELECT id_producto FROM listas_items
+            LIMIT ?
+            """,
+            (limite,),
+        ).fetchall()
+        vistos: set[str] = set()
+        ids: list[str] = []
+        for fila in filas:
+            pid = str(fila["id_producto"])
+            if pid not in vistos:
+                vistos.add(pid)
+                ids.append(pid)
+        return ids
+
+    def ids_cesta(self) -> list[str]:
+        filas = self.conexion.execute("SELECT id_producto FROM cesta").fetchall()
+        return [str(f["id_producto"]) for f in filas]
+
+    def ids_lista_compra(self, id_lista: int) -> list[str]:
+        filas = self.conexion.execute(
+            "SELECT id_producto FROM listas_items WHERE id_lista = ?",
+            (id_lista,),
+        ).fetchall()
+        return [str(f["id_producto"]) for f in filas]
 
     @staticmethod
     def _con_alias(fila: dict[str, Any]) -> dict[str, Any]:
